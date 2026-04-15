@@ -45,8 +45,9 @@ That generates:
 `dist-v1-stock\CloneHeroSectionTracker-v1.0.0.4080-obs-friendly.zip`
 
 The release pack includes:
-- `install.ps1`
-- `uninstall.ps1`
+- `Install Clone Hero Section Tracker.cmd`
+- `Uninstall Clone Hero Section Tracker.cmd`
+- `Uninstall Clone Hero Section Tracker and Wipe Data.cmd`
 - `README.txt`
 - `version.txt`
 - `RELEASE_NOTES.txt`

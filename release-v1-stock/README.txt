@@ -12,8 +12,8 @@ Recommended setup
 1. Close Clone Hero.
 2. Make a copy of your vanilla Clone Hero folder so you keep one untouched backup.
 3. Extract this release somewhere convenient.
-4. Run install.ps1.
-5. Select the Clone Hero folder that contains "Clone Hero.exe".
+4. Double-click "Install Clone Hero Section Tracker.cmd".
+5. Type or paste the Clone Hero folder that contains "Clone Hero.exe".
 6. Launch Clone Hero from that folder.
 
 What the installer does
@@ -45,8 +45,8 @@ A few quick notes
 
 Uninstall
 1. Close Clone Hero.
-2. Run uninstall.ps1.
-3. Select the same Clone Hero folder you installed into.
+2. Double-click "Uninstall Clone Hero Section Tracker.cmd".
+3. Type or paste the same Clone Hero folder you installed into.
 
 Optional full cleanup
-- Run uninstall.ps1 -RemoveTrackerData to also delete %LOCALAPPDATA%\CloneHeroSectionTracker
+- Double-click "Uninstall Clone Hero Section Tracker and Wipe Data.cmd" to also delete %LOCALAPPDATA%\CloneHeroSectionTracker

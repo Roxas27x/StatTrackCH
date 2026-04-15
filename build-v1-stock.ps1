@@ -24,8 +24,9 @@ if (-not (Test-Path $stockSrc)) { throw "Missing source file: $stockSrc" }
 if (-not (Test-Path $patcherSrc)) { throw "Missing source file: $patcherSrc" }
 if (-not (Test-Path $desktopOverlaySrc)) { throw "Missing source file: $desktopOverlaySrc" }
 if (-not (Test-Path $runtimeCheckerSrc)) { throw "Missing source file: $runtimeCheckerSrc" }
-if (-not (Test-Path (Join-Path $releaseTemplateDir "install.ps1"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'install.ps1')" }
-if (-not (Test-Path (Join-Path $releaseTemplateDir "uninstall.ps1"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'uninstall.ps1')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Install Clone Hero Section Tracker.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Install Clone Hero Section Tracker.cmd')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall Clone Hero Section Tracker.cmd')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall Clone Hero Section Tracker and Wipe Data.cmd')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "README.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'README.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "version.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'version.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'RELEASE_NOTES.txt')" }
@@ -74,6 +75,9 @@ if ($LASTEXITCODE -ne 0) { throw "Runtime compatibility check failed." }
 Copy-Item -LiteralPath $cecilDll -Destination (Join-Path $outDir "Mono.Cecil.dll") -Force
 Copy-Item -LiteralPath $cecilRocksDll -Destination (Join-Path $outDir "Mono.Cecil.Rocks.dll") -Force
 
+if (Test-Path $releaseDir) {
+    Remove-Item -LiteralPath $releaseDir -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -LiteralPath $stockDll -Destination (Join-Path $releaseDir "CloneHeroV1StockTracker.dll") -Force
 Copy-Item -LiteralPath $patcherExe -Destination (Join-Path $releaseDir "V1StockAssemblyPatcher.exe") -Force
@@ -81,8 +85,9 @@ Copy-Item -LiteralPath $desktopOverlayExe -Destination (Join-Path $releaseDir "C
 Copy-Item -LiteralPath $runtimeCheckerExe -Destination (Join-Path $releaseDir "V1RuntimeCompatibilityChecker.exe") -Force
 Copy-Item -LiteralPath $cecilDll -Destination (Join-Path $releaseDir "Mono.Cecil.dll") -Force
 Copy-Item -LiteralPath $cecilRocksDll -Destination (Join-Path $releaseDir "Mono.Cecil.Rocks.dll") -Force
-Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "install.ps1") -Destination (Join-Path $releaseDir "install.ps1") -Force
-Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "uninstall.ps1") -Destination (Join-Path $releaseDir "uninstall.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Install Clone Hero Section Tracker.cmd") -Destination (Join-Path $releaseDir "Install Clone Hero Section Tracker.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker.cmd") -Destination (Join-Path $releaseDir "Uninstall Clone Hero Section Tracker.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd") -Destination (Join-Path $releaseDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "README.txt") -Destination (Join-Path $releaseDir "README.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "version.txt") -Destination (Join-Path $releaseDir "version.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt") -Destination (Join-Path $releaseDir "RELEASE_NOTES.txt") -Force
