@@ -1,0 +1,9 @@
+Clone Hero Section Tracker - Changelog
+
+2026-04-15
+- Added a player-facing release pack with install.ps1 and uninstall.ps1.
+- Added automatic backup/restore of Assembly-CSharp.dll during install and uninstall.
+- Added a ready-to-zip release output under dist-v1-stock\release.
+- Slimmed and cleaned the stock-v1 release surface for public distribution.
+- Simplified section OBS export into a single Section Summary checkbox and multiline summary.txt output.
+- Kept OBS exports opt-in by default to reduce unnecessary hitching.
