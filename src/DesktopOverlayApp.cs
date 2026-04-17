@@ -563,7 +563,6 @@ internal sealed class DesktopOverlayForm : Form
     {
         return metricKey switch
         {
-            "score" => state.Score.ToString(CultureInfo.InvariantCulture),
             "streak" => state.Streak.ToString(CultureInfo.InvariantCulture),
             "best_streak" => state.BestStreak.ToString(CultureInfo.InvariantCulture),
             "starts" => state.Starts.ToString(CultureInfo.InvariantCulture),
@@ -755,7 +754,6 @@ internal sealed class DesktopOverlayForm : Form
 
     private static readonly Dictionary<string, string> MetricLabels = new(StringComparer.Ordinal)
     {
-        ["score"] = "Score",
         ["streak"] = "Current Streak",
         ["best_streak"] = "Best Streak",
         ["current_missed_notes"] = "Current Missed Notes",
