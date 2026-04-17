@@ -187,6 +187,11 @@ internal static class V1StockAssemblyPatcher
             patchesApplied++;
         }
 
+        if (ApplyPracticeSpeedPatch(updateMethod))
+        {
+            patchesApplied++;
+        }
+
         TypeDefinition? mainMenu = targetModule.Types.FirstOrDefault(type => type.Name == "MainMenu");
         if (mainMenu == null)
         {
@@ -312,6 +317,75 @@ internal static class V1StockAssemblyPatcher
             instructions[2].OpCode == OpCodes.Stfld &&
             instructions[3].OpCode == OpCodes.Ldarg_1 &&
             instructions[4].OpCode == OpCodes.Callvirt;
+    }
+
+    private static bool ApplyPracticeSpeedPatch(MethodDefinition updateMethod)
+    {
+        if (!updateMethod.HasBody)
+        {
+            return false;
+        }
+
+        var instructions = updateMethod.Body.Instructions;
+        for (int index = 0; index <= instructions.Count - 5; index++)
+        {
+            if ((instructions[index].OpCode != OpCodes.Ldsfld) ||
+                (instructions[index + 1].OpCode != OpCodes.Callvirt) ||
+                !IsCurrentValueGetter(instructions[index + 1].Operand) ||
+                !IsConstant100(instructions[index + 2]) ||
+                !IsEqualityBranch(instructions[index + 3]) ||
+                !IsLeave(instructions[index + 4]))
+            {
+                continue;
+            }
+
+            if (instructions[index + 3].Operand is not Instruction continueInstruction)
+            {
+                continue;
+            }
+
+            instructions[index].OpCode = OpCodes.Nop;
+            instructions[index].Operand = null;
+            instructions[index + 1].OpCode = OpCodes.Nop;
+            instructions[index + 1].Operand = null;
+            instructions[index + 2].OpCode = OpCodes.Nop;
+            instructions[index + 2].Operand = null;
+            instructions[index + 3].OpCode = OpCodes.Br;
+            instructions[index + 3].Operand = continueInstruction;
+            instructions[index + 4].OpCode = OpCodes.Nop;
+            instructions[index + 4].Operand = null;
+            updateMethod.Body.SimplifyMacros();
+            updateMethod.Body.OptimizeMacros();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCurrentValueGetter(object? operand)
+    {
+        return operand is MethodReference method &&
+            method.Name == "get_CurrentValue";
+    }
+
+    private static bool IsConstant100(Instruction instruction)
+    {
+        if (instruction.OpCode == OpCodes.Ldc_I4_S && instruction.Operand is sbyte signedByte)
+        {
+            return signedByte == 100;
+        }
+
+        return instruction.OpCode == OpCodes.Ldc_I4 && instruction.Operand is int intValue && intValue == 100;
+    }
+
+    private static bool IsEqualityBranch(Instruction instruction)
+    {
+        return instruction.OpCode == OpCodes.Beq || instruction.OpCode == OpCodes.Beq_S;
+    }
+
+    private static bool IsLeave(Instruction instruction)
+    {
+        return instruction.OpCode == OpCodes.Leave || instruction.OpCode == OpCodes.Leave_S;
     }
 
     private static bool ApplyCustomSubtitlePatch(ModuleDefinition module)
