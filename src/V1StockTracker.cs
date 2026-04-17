@@ -76,7 +76,6 @@ public static class StockTrackerHooks
             EnsureOverlayHost();
             lock (Sync)
             {
-                Tracker.HandleGameManagerFrame(gameManager);
                 if (Time.unscaledTime - _lastTickAt < TickIntervalSeconds)
                 {
                     return;
@@ -283,8 +282,6 @@ internal sealed class V1StockTracker
     private const string GlobalVariablesTypeName = "GlobalVariables";
     private const string BasePlayerTypeName = "BasePlayer";
     private const string SngFileIdentifier = "SNGPKG";
-    private const string PracticeSpeedMultiplierFieldName = "ˁʻʷʵˁʳʿʳʺʸʷ";
-    private const string PracticeSpeedOffsetFieldName = "ʻʽʻʳʽʽʴʶʷʼʺ";
     private const string PracticeUiFieldName = "ʳʺˀˁʴˀʳˁʴʴʽ";
     private const string PlayersFieldName = "ʾʸˁʳʽʹʷʴʽʵʽ";
     private const string SongDurationFieldName = "ʷʾˀʲʸˀʺˁʻʲʼ";
@@ -328,8 +325,6 @@ internal sealed class V1StockTracker
     private int _memoryVersion;
     private int _configVersion;
     private bool _initialized;
-    private bool _hasSavedPracticeBaseSongSpeed;
-    private int _savedPracticeBaseSongSpeedPercent = 100;
     private SectionSnapshotCache? _sectionSnapshotCache;
     private string _completedRunsSnapshotSongKey = string.Empty;
     private int _completedRunsSnapshotMemoryVersion = -1;
@@ -348,8 +343,6 @@ internal sealed class V1StockTracker
     private FieldInfo? _songTimeField;
     private FieldInfo? _chartField;
     private FieldInfo? _controllerField;
-    private FieldInfo? _practiceSpeedMultiplierField;
-    private FieldInfo? _practiceSpeedOffsetField;
     private FieldInfo? _scoreField;
     private FieldInfo? _comboField;
     private FieldInfo? _ghostNotesField;
@@ -427,14 +420,6 @@ internal sealed class V1StockTracker
     private const float OverlayWidgetDefaultWidth = 300f;
     private const float OverlayWidgetDefaultHeight = 90f;
     private const int OverlayWidgetResizeModeVersion = 2;
-
-    public void HandleGameManagerFrame(object gameManager)
-    {
-        EnsureInitialized(gameManager.GetType().Assembly);
-        _gameManagerType ??= gameManager.GetType();
-        CacheReflection();
-        NormalizePracticeSpeed(gameManager);
-    }
 
     public void Tick(object gameManager)
     {
@@ -2450,9 +2435,6 @@ internal sealed class V1StockTracker
         _chartField ??= _gameManagerType.GetField(CurrentChartFieldName, AnyInstance)
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(field => field.Name.IndexOf("k__BackingField", StringComparison.Ordinal) >= 0)
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(IsChartLikeField);
-        _practiceSpeedMultiplierField ??= _gameManagerType.GetField(PracticeSpeedMultiplierFieldName, AnyInstance);
-        _practiceSpeedOffsetField ??= _gameManagerType.GetField(PracticeSpeedOffsetFieldName, AnyInstance);
-
         _controllerField ??= _basePlayerType.GetField(BasePlayerControllerFieldName, AnyInstance);
         _scoreField ??= _basePlayerType.GetField(BasePlayerScoreFieldName, AnyInstance);
         _comboField ??= _basePlayerType.GetField(BasePlayerComboFieldName, AnyInstance);
@@ -3599,88 +3581,6 @@ internal sealed class V1StockTracker
         {
             LogVerbose($"PracticeModeReadFailure | {ex.Message}");
             return false;
-        }
-    }
-
-    private void NormalizePracticeSpeed(object gameManager)
-    {
-        int currentSongSpeedPercent = TryReadSongSpeedPercent();
-        bool isPractice = IsPracticeMode(gameManager);
-        if (!isPractice)
-        {
-            if (currentSongSpeedPercent > 0)
-            {
-                _savedPracticeBaseSongSpeedPercent = currentSongSpeedPercent;
-                _hasSavedPracticeBaseSongSpeed = true;
-            }
-
-            return;
-        }
-
-        if (currentSongSpeedPercent > 0 && !_hasSavedPracticeBaseSongSpeed)
-        {
-            _savedPracticeBaseSongSpeedPercent = currentSongSpeedPercent;
-            _hasSavedPracticeBaseSongSpeed = true;
-        }
-
-        int baseSongSpeedPercent = _hasSavedPracticeBaseSongSpeed && _savedPracticeBaseSongSpeedPercent > 0
-            ? _savedPracticeBaseSongSpeedPercent
-            : Math.Max(currentSongSpeedPercent, 100);
-        if (currentSongSpeedPercent != baseSongSpeedPercent)
-        {
-            TrySetSongSpeedPercent(baseSongSpeedPercent);
-        }
-
-        if (_practiceSpeedMultiplierField == null)
-        {
-            return;
-        }
-
-        float relativeOffsetPercent = ConvertToSingle(_practiceSpeedOffsetField?.GetValue(gameManager));
-        float relativeFactor = Mathf.Max(0.1f, 1f + relativeOffsetPercent / 100f);
-        float desiredPracticeSpeed = baseSongSpeedPercent / 100f * relativeFactor;
-        float currentPracticeSpeed = ConvertToSingle(_practiceSpeedMultiplierField.GetValue(gameManager));
-        if (Mathf.Abs(currentPracticeSpeed - desiredPracticeSpeed) <= 0.0001f)
-        {
-            return;
-        }
-
-        _practiceSpeedMultiplierField.SetValue(gameManager, desiredPracticeSpeed);
-    }
-
-    private int TryReadSongSpeedPercent()
-    {
-        try
-        {
-            return ReadSongSpeed().Percent;
-        }
-        catch
-        {
-            return 100;
-        }
-    }
-
-    private void TrySetSongSpeedPercent(int percent)
-    {
-        try
-        {
-            if (percent <= 0)
-            {
-                percent = 100;
-            }
-
-            object? setting = _songSpeedSettingField?.GetValue(null);
-            if (setting != null && _gameSettingCurrentValueProperty?.CanWrite == true)
-            {
-                _gameSettingCurrentValueProperty.SetValue(setting, percent, null);
-            }
-
-            object? globalVariables = _globalVariablesSingletonField?.GetValue(null);
-            _globalVariablesSongSpeedField?.SetValue(globalVariables, percent);
-        }
-        catch (Exception ex)
-        {
-            LogVerbose($"SongSpeedWriteFailure | {ex.Message}");
         }
     }
 
@@ -6602,7 +6502,6 @@ internal sealed class V1StockTracker
 
     private static int ConvertToInt32(object? value) => value == null ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
     private static double ConvertToDouble(object? value) => value == null ? 0d : Convert.ToDouble(value, CultureInfo.InvariantCulture);
-    private static float ConvertToSingle(object? value) => value == null ? 0f : Convert.ToSingle(value, CultureInfo.InvariantCulture);
     private static bool ConvertToBoolean(object? value) => value != null && Convert.ToBoolean(value, CultureInfo.InvariantCulture);
     private static bool TryGetBooleanField(object obj, string fieldName)
     {
