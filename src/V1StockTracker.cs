@@ -747,7 +747,7 @@ internal sealed class V1StockTracker
                 }
 
                 GUILayout.Label(string.Empty, GUILayout.Height(8f));
-                bool showTrackedSections = HasAnySectionTextExportEnabled() || _overlayEditorVisible;
+                bool showTrackedSections = HasAnyTrackedSectionExportEnabled(songConfig) || _overlayEditorVisible;
                 if (showTrackedSections)
                 {
                     GUILayout.Label("Live Section Export Select", GUILayout.Width(contentRect.width - 24f));
@@ -755,7 +755,7 @@ internal sealed class V1StockTracker
                     {
                         fontSize = Mathf.Max(10, GUI.skin.label.fontSize - 2)
                     };
-                    GUILayout.Label("Checking these boxes will allow their current Attempts, FC's Past, and Killed the Run values to be actively exported to OBS.", sectionHelpStyle, GUILayout.Width(contentRect.width - 24f));
+                    GUILayout.Label("Checking these boxes will allow their current Attempts, FC's Past, and Killed the Run values to be actively exported to OBS. When at least one section is checked, current_section_summary.txt will also stay active.", sectionHelpStyle, GUILayout.Width(contentRect.width - 24f));
                     foreach (SectionStatsState section in GetOverlaySectionsForOverlay(state))
                     {
                         string sectionOverlayKey = BuildSectionOverlayKey(state.SectionStats, section);
@@ -2233,12 +2233,13 @@ internal sealed class V1StockTracker
     {
         return state.EnabledTextExports.Any(pair =>
             !string.Equals(pair.Key, NoteSplitModeExportKey, StringComparison.Ordinal) &&
-            pair.Value);
+            pair.Value) ||
+            state.SectionStats.Any(section => section.Tracked);
     }
 
-    private bool HasAnySectionTextExportEnabled()
+    private static bool HasAnyTrackedSectionExportEnabled(SongConfig songConfig)
     {
-        return IsTextExportEnabled(EnsureDefaultEnabledTextExports(), "section_summary");
+        return songConfig.TrackedSections.Any(pair => pair.Value);
     }
 
     private void DisableAllTextExports(Dictionary<string, bool> enabledTextExports)
@@ -2528,20 +2529,16 @@ internal sealed class V1StockTracker
             pair.Value != null &&
             pair.Value.Enabled &&
             pair.Key.StartsWith("section:", StringComparison.Ordinal));
-        bool needSectionExports = HasAnySectionTextExportEnabled();
+        bool needSectionExports = HasAnyTrackedSectionExportEnabled(songConfig);
         bool needCompletedRuns = IsTextExportEnabled(enabledTextExports, "completed_runs");
         bool needRunTracking =
             IsTextExportEnabled(enabledTextExports, "best_streak") ||
-            IsTextExportEnabled(enabledTextExports, "starts") ||
-            IsTextExportEnabled(enabledTextExports, "restarts") ||
             IsTextExportEnabled(enabledTextExports, "attempts") ||
             IsTextExportEnabled(enabledTextExports, "lifetime_ghosted_notes") ||
             IsTextExportEnabled(enabledTextExports, "global_lifetime_ghosted_notes") ||
             IsTextExportEnabled(enabledTextExports, "fc_achieved") ||
             needSectionExports ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("best_streak")) ||
-            IsWidgetEnabled(songConfig, BuildMetricWidgetKey("starts")) ||
-            IsWidgetEnabled(songConfig, BuildMetricWidgetKey("restarts")) ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("attempts")) ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("lifetime_ghosted_notes")) ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("global_lifetime_ghosted_notes")) ||
@@ -2571,7 +2568,6 @@ internal sealed class V1StockTracker
                 IsTextExportEnabled(enabledTextExports, "current_missed_notes") ||
                 IsWidgetEnabled(songConfig, BuildMetricWidgetKey("current_missed_notes")),
             NeedSongTiming = needAnyRunTracking ||
-                IsTextExportEnabled(enabledTextExports, "song_clock") ||
                 IsTextExportEnabled(enabledTextExports, "current_section") ||
                 needSectionExports ||
                 needSectionWidgets ||
@@ -5416,9 +5412,12 @@ internal sealed class V1StockTracker
             }
         }
 
-        if (songConfig.OverlayWidgets.Remove(BuildMetricWidgetKey("score")))
+        foreach (string deprecatedMetricKey in new[] { "score", "starts", "restarts" })
         {
-            MarkConfigDirty();
+            if (songConfig.OverlayWidgets.Remove(BuildMetricWidgetKey(deprecatedMetricKey)))
+            {
+                MarkConfigDirty();
+            }
         }
 
         return songConfig;
@@ -5427,20 +5426,6 @@ internal sealed class V1StockTracker
     private bool MigrateLegacySectionTextExports(Dictionary<string, bool> enabledTextExports)
     {
         bool changed = false;
-        bool legacySectionExportEnabled =
-            enabledTextExports.TryGetValue("section_attempts", out bool sectionAttemptsEnabled) && sectionAttemptsEnabled ||
-            enabledTextExports.TryGetValue("section_fcs_past", out bool sectionFcsPastEnabled) && sectionFcsPastEnabled ||
-            enabledTextExports.TryGetValue("section_killed_the_run", out bool sectionKilledEnabled) && sectionKilledEnabled;
-
-        if (legacySectionExportEnabled)
-        {
-            if (!enabledTextExports.TryGetValue("section_summary", out bool summaryEnabled) || !summaryEnabled)
-            {
-                enabledTextExports["section_summary"] = true;
-                changed = true;
-            }
-        }
-
         foreach (string legacyKey in new[] { "section_attempts", "section_fcs_past", "section_killed_the_run" })
         {
             if (enabledTextExports.Remove(legacyKey))
@@ -5462,6 +5447,13 @@ internal sealed class V1StockTracker
         if (enabledTextExports.Remove("song_info"))
         {
             changed = true;
+        }
+        foreach (string removedKey in new[] { "starts", "restarts", "song_clock", "section_summary" })
+        {
+            if (enabledTextExports.Remove(removedKey))
+            {
+                changed = true;
+            }
         }
 
         return changed;
@@ -6229,7 +6221,7 @@ internal sealed class V1StockTracker
         EnsureLegacyObsCurrentCleanup(currentDir);
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), FormatObsValue("Current Section", state.CurrentSection ?? string.Empty));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), FormatObsValue("Current Streak", state.Streak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), FormatObsValue("Best Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), FormatObsValue("Best FC Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "starts"), Path.Combine(currentDir, "starts.txt"), FormatObsValue("Starts", state.Starts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "restarts"), Path.Combine(currentDir, "restarts.txt"), FormatObsValue("Restarts", state.Restarts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), FormatObsValue("Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
@@ -6242,7 +6234,8 @@ internal sealed class V1StockTracker
         WriteOrDeleteObsText(IsTextExportEnabled(state, "song_clock"), Path.Combine(currentDir, "song_time.txt"), FormatObsValue("Song Time", state.SongTime.ToString("0.###", CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "song_clock"), Path.Combine(currentDir, "song_duration.txt"), FormatObsValue("Song Duration", state.SongDuration.ToString("0.###", CultureInfo.InvariantCulture)));
 
-        if (state.CurrentSectionStats != null && IsTextExportEnabled(state, "section_summary"))
+        bool exportTrackedSectionFiles = state.SectionStats.Any(candidate => candidate.Tracked);
+        if (state.CurrentSectionStats != null && exportTrackedSectionFiles)
         {
             WriteObsText(Path.Combine(currentDir, "current_section_summary.txt"), BuildSectionSummary(state.CurrentSectionStats));
         }
@@ -6272,7 +6265,7 @@ internal sealed class V1StockTracker
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(songDir, "current_section.txt"), FormatObsValue("Current Section", currentSectionExportName));
 
         string sectionsDir = Path.Combine(songDir, "sections");
-        bool exportAnySectionFiles = IsTextExportEnabled(state, "section_summary");
+        bool exportAnySectionFiles = exportTrackedSectionFiles;
         if (exportAnySectionFiles)
         {
             Directory.CreateDirectory(sectionsDir);
@@ -7312,14 +7305,12 @@ internal sealed class OverlayMetricDefinition
     public static readonly OverlayMetricDefinition[] All =
     {
         new("streak", "Current Streak"),
-        new("best_streak", "Best Streak"),
+        new("best_streak", "Best FC Streak"),
         new("current_missed_notes", "Current Missed Notes"),
         new("current_overstrums", "Current Overstrums"),
         new("current_ghosted_notes", "Current Ghosted Notes"),
         new("lifetime_ghosted_notes", "Song Lifetime Ghosts"),
         new("global_lifetime_ghosted_notes", "Global Lifetime Ghosts"),
-        new("starts", "Starts"),
-        new("restarts", "Restarts"),
         new("attempts", "Total Attempts"),
         new("fc_achieved", "FC Achieved")
     };
@@ -7341,9 +7332,7 @@ internal sealed class TextExportDefinition
         new("note_split_mode", "NoteSplit Mode"),
         new("current_section", "Current Section"),
         new("streak", "Current Streak"),
-        new("best_streak", "Best Streak"),
-        new("starts", "Starts"),
-        new("restarts", "Restarts"),
+        new("best_streak", "Best FC Streak"),
         new("attempts", "Total Attempts"),
         new("current_ghosted_notes", "Current Ghosted Notes"),
         new("current_overstrums", "Current Overstrums"),
@@ -7351,8 +7340,6 @@ internal sealed class TextExportDefinition
         new("lifetime_ghosted_notes", "Song Lifetime Ghosts"),
         new("global_lifetime_ghosted_notes", "Global Lifetime Ghosts"),
         new("fc_achieved", "FC Achieved"),
-        new("song_clock", "Song Time / Duration"),
-        new("section_summary", "Section Summary"),
         new("completed_runs", "Completed Runs")
     };
 

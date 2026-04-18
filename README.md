@@ -54,21 +54,9 @@ Writes the live combo streak from the current run to the OBS export files.
 </details>
 
 <details>
-<summary><code>Best Streak</code> (Export)</summary>
+<summary><code>Best FC Streak</code> (Export)</summary>
 
-Writes the saved best streak for the current song profile. This is persistent tracker memory, not just the current run.
-</details>
-
-<details>
-<summary><code>Starts</code> (Export)</summary>
-
-Writes the saved number of times this song profile has been started.
-</details>
-
-<details>
-<summary><code>Restarts</code> (Export)</summary>
-
-Writes the saved number of restarts for this song profile.
+Writes the saved highest streak reached before a miss on this song profile. This is persistent tracker memory, not just the current run.
 </details>
 
 <details>
@@ -114,18 +102,6 @@ Writes whether this song profile has ever been FC'd in saved tracker memory.
 </details>
 
 <details>
-<summary><code>Song Time / Duration</code> (Export)</summary>
-
-Writes both the current song time and the total song duration to the OBS export files.
-</details>
-
-<details>
-<summary><code>Section Summary</code> (Export)</summary>
-
-Turns on the live section-summary export. This writes the current section summary text and enables per-section OBS files for the sections you check in `Live Section Export Select`.
-</details>
-
-<details>
 <summary><code>Completed Runs</code> (Export)</summary>
 
 Writes the saved completed-run history for the current song profile into the OBS export folder. Completed runs are still kept in `memory.json` even if this export is off; this toggle only controls the OBS files.
@@ -142,7 +118,7 @@ Turns off every checkbox in the `Exports / Desktop Modes` section at once, inclu
 <details>
 <summary><code>Live Section Export Select</code></summary>
 
-Shows one checkbox per detected section in the current song. Checking a section tells the tracker to actively export that section's `Attempts`, `FCs Past`, and `Killed the Run` values to OBS while that song is loaded.
+Shows one checkbox per detected section in the current song. Checking a section tells the tracker to actively export that section's `Attempts`, `FCs Past`, and `Killed the Run` values to OBS while that song is loaded. When at least one section is checked, the tracker also writes the live `current_section_summary.txt` file automatically.
 </details>
 
 <details>
@@ -164,9 +140,9 @@ Creates a desktop widget that shows the live combo streak from the current run.
 </details>
 
 <details>
-<summary><code>Best Streak</code> (Stat Widget)</summary>
+<summary><code>Best FC Streak</code> (Stat Widget)</summary>
 
-Creates a desktop widget that shows the saved best streak for the current song profile.
+Creates a desktop widget that shows the saved highest streak reached before a miss on the current song profile.
 </details>
 
 <details>
@@ -197,18 +173,6 @@ Creates a desktop widget that shows the saved lifetime ghost-note total for the 
 <summary><code>Global Lifetime Ghosts</code> (Stat Widget)</summary>
 
 Creates a desktop widget that shows the saved lifetime ghost-note total across all tracked songs.
-</details>
-
-<details>
-<summary><code>Starts</code> (Stat Widget)</summary>
-
-Creates a desktop widget that shows the saved number of starts for the current song profile.
-</details>
-
-<details>
-<summary><code>Restarts</code> (Stat Widget)</summary>
-
-Creates a desktop widget that shows the saved number of restarts for the current song profile.
 </details>
 
 <details>

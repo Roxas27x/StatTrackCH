@@ -674,8 +674,6 @@ internal sealed class DesktopOverlayForm : Form
         {
             "streak" => state.Streak.ToString(CultureInfo.InvariantCulture),
             "best_streak" => state.BestStreak.ToString(CultureInfo.InvariantCulture),
-            "starts" => state.Starts.ToString(CultureInfo.InvariantCulture),
-            "restarts" => state.Restarts.ToString(CultureInfo.InvariantCulture),
             "attempts" => state.Attempts.ToString(CultureInfo.InvariantCulture),
             "current_missed_notes" => state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture),
             "current_overstrums" => state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture),
@@ -892,14 +890,12 @@ internal sealed class DesktopOverlayForm : Form
     private static readonly Dictionary<string, string> MetricLabels = new(StringComparer.Ordinal)
     {
         ["streak"] = "Current Streak",
-        ["best_streak"] = "Best Streak",
+        ["best_streak"] = "Best FC Streak",
         ["current_missed_notes"] = "Current Missed Notes",
         ["current_overstrums"] = "Current Overstrums",
         ["current_ghosted_notes"] = "Current Ghosted Notes",
         ["lifetime_ghosted_notes"] = "Song Lifetime Ghosts",
         ["global_lifetime_ghosted_notes"] = "Global Lifetime Ghosts",
-        ["starts"] = "Starts",
-        ["restarts"] = "Restarts",
         ["attempts"] = "Total Attempts",
         ["fc_achieved"] = "FC Achieved"
     };
