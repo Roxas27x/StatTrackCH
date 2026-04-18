@@ -16,9 +16,6 @@ internal static class V1StockAssemblyPatcher
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
-    private const string SongSelectPrimaryWriterMethodName = "ʽʷʲʾʷʽˁʾˁʹʷ";
-    private const string SongSelectSecondaryWriterMethodName = "ʸʶʳʻʵʺʲʳˁʼʲ";
-    private const string SavedSongSpeedFieldName = "ʹʷʾʿʴˁʼʲʼʸʴ";
     private const string VersionReplacementText =
         "v1.0.0.4080 - OBS FRIENDLY VERSION\n" +
         "<size=90%>Mod by Roxas27x</size>\n" +
@@ -221,11 +218,6 @@ internal static class V1StockAssemblyPatcher
             patchesApplied++;
         }
 
-        if (ApplyDonorPracticeTransplant(targetModule))
-        {
-            patchesApplied++;
-        }
-
         TypeDefinition? basePlayer = targetModule.Types.FirstOrDefault(type => type.Name == "BasePlayer");
         if (basePlayer == null)
         {
@@ -278,49 +270,6 @@ internal static class V1StockAssemblyPatcher
         il.InsertBefore(first, il.Create(OpCodes.Call, hook));
         method.Body.SimplifyMacros();
         method.Body.OptimizeMacros();
-    }
-
-    private static bool ApplyDonorPracticeTransplant(ModuleDefinition module)
-    {
-        TypeDefinition? songSelect = module.Types.FirstOrDefault(type => type.Name == "SongSelect");
-        if (songSelect == null)
-        {
-            Console.Error.WriteLine("SongSelect type not found for donor practice transplant.");
-            return false;
-        }
-
-        MethodDefinition? primaryWriter = songSelect.Methods.FirstOrDefault(method => method.Name == SongSelectPrimaryWriterMethodName && !method.HasParameters && method.HasBody);
-        MethodDefinition? secondaryWriter = songSelect.Methods.FirstOrDefault(method => method.Name == SongSelectSecondaryWriterMethodName && !method.HasParameters && method.HasBody);
-        if (primaryWriter == null || secondaryWriter == null)
-        {
-            return false;
-        }
-
-        // The donor assembly only has one SongSelect path that captures the base song speed.
-        // Stock v1 has a second UI path that rewrites the saved speed during section/difficulty flows,
-        // which causes practice mode to snap back to 100%. Remove only that duplicate writer.
-        var instructions = secondaryWriter.Body.Instructions;
-        if (instructions.Count < 4)
-        {
-            return false;
-        }
-
-        if (instructions[3].OpCode != OpCodes.Stfld ||
-            instructions[3].Operand is not FieldReference savedSpeedField ||
-            savedSpeedField.Name != SavedSongSpeedFieldName)
-        {
-            return false;
-        }
-
-        ILProcessor il = secondaryWriter.Body.GetILProcessor();
-        for (int i = 0; i < 4; i++)
-        {
-            il.Remove(instructions[0]);
-        }
-
-        secondaryWriter.Body.SimplifyMacros();
-        secondaryWriter.Body.OptimizeMacros();
-        return true;
     }
 
     private static bool HasHookCall(MethodDefinition method, string hookMethodName)
