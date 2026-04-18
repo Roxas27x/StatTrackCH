@@ -1,6 +1,6 @@
 # Clone Hero Section Tracker
 
-Clone Hero Section Tracker turns a normal Clone Hero v1 install into a section-practice, streaming, and run-tracking build.
+Clone Hero Section Tracker turns a normal Clone Hero v1 install into an OBS-friendly stat tracking build for section practice, live overlays, and run tracking.
 
 It adds:
 - an in-game overlay editor for configuring exports, tracked sections, and desktop widgets
