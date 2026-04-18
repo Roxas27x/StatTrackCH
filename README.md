@@ -239,6 +239,7 @@ The user release pack is the zip that contains the installer, uninstaller, track
 How to install:
 1. Close Clone Hero.
 2. Make a copy of your vanilla Clone Hero folder if you want to keep one untouched backup.
+2a. When you install this mod, a backup of the .dll is automatically created, so copying your vanilla folder is technically optional.
 3. Extract the release zip somewhere convenient.
 4. Double-click `Install StatTrack.cmd`.
 5. Choose `Y` to install into `C:\Program Files\Clone Hero`, or choose `N` to browse to a different Clone Hero folder.
