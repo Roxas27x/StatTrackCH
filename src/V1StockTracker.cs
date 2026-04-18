@@ -16,10 +16,74 @@ using UnityEngine;
 
 namespace CloneHeroSectionTracker.V1Stock
 {
+internal static class StatTrackDataPaths
+{
+    internal const string CurrentDirectoryName = "StatTrack";
+    internal const string LegacyDirectoryName = "CloneHeroSectionTracker";
+
+    internal static string GetCurrentDataDirectory()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), CurrentDirectoryName);
+    }
+
+    internal static string EnsureDataDirectoryMigrated(Action<string>? log = null)
+    {
+        string currentDir = GetCurrentDataDirectory();
+        string legacyDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), LegacyDirectoryName);
+        if (!Directory.Exists(legacyDir))
+        {
+            return currentDir;
+        }
+
+        try
+        {
+            MergeDirectoryContents(legacyDir, currentDir);
+            log?.Invoke("Merged legacy data directory into " + currentDir);
+        }
+        catch (Exception ex)
+        {
+            log?.Invoke("Legacy data directory merge failed | " + ex.Message);
+        }
+
+        return currentDir;
+    }
+
+    private static void MergeDirectoryContents(string sourceDir, string destinationDir)
+    {
+        Directory.CreateDirectory(destinationDir);
+
+        foreach (string filePath in Directory.GetFiles(sourceDir))
+        {
+            string destinationPath = Path.Combine(destinationDir, Path.GetFileName(filePath));
+            string? destinationParent = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(destinationParent))
+            {
+                Directory.CreateDirectory(destinationParent);
+            }
+
+            if (!File.Exists(destinationPath))
+            {
+                File.Copy(filePath, destinationPath, overwrite: false);
+            }
+        }
+
+        foreach (string directoryPath in Directory.GetDirectories(sourceDir))
+        {
+            string directoryName = Path.GetFileName(directoryPath);
+            if (string.IsNullOrEmpty(directoryName))
+            {
+                continue;
+            }
+
+            MergeDirectoryContents(directoryPath, Path.Combine(destinationDir, directoryName));
+        }
+    }
+}
+
 internal static class StockTrackerLog
 {
     private static readonly object Sync = new();
-    private static readonly string LogDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloneHeroSectionTracker");
+    private static readonly string LogDir = StatTrackDataPaths.EnsureDataDirectoryMigrated();
     private static readonly string LogPath = Path.Combine(LogDir, "v1-stock.log");
     private static readonly bool DebugLoggingEnabled = false;
 
@@ -457,13 +521,23 @@ internal sealed class V1StockTracker
 
     public void HandleOverlayUpdate()
     {
+        if (_overlayEditorVisible && Input.GetKeyDown(KeyCode.Escape))
+        {
+            _overlayEditorVisible = false;
+            StockTrackerLog.WriteDebug("OverlayToggle | visible=0 | key=Escape");
+            return;
+        }
+
         bool controlHeld = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
         if ((controlHeld && Input.GetKeyDown(KeyCode.O)) ||
             Input.GetKeyDown(KeyCode.F8) ||
             Input.GetKeyDown(KeyCode.Home))
         {
             _overlayEditorVisible = !_overlayEditorVisible;
-            StockTrackerLog.WriteDebug("OverlayToggle | visible=" + (_overlayEditorVisible ? "1" : "0"));
+            string toggleKey = controlHeld
+                ? "Ctrl+O"
+                : (Input.GetKeyDown(KeyCode.Home) ? "Home" : "F8");
+            StockTrackerLog.WriteDebug("OverlayToggle | visible=" + (_overlayEditorVisible ? "1" : "0") + " | key=" + toggleKey);
         }
     }
 
@@ -539,56 +613,18 @@ internal sealed class V1StockTracker
         TrackerState state = CreateIdleState();
         state.OverlayEditorVisible = _overlayEditorVisible;
         state.EnabledTextExports = defaultExports;
-
-        object? globalVariables = null;
-        try
-        {
-            globalVariables = _globalVariablesSingletonField?.GetValue(null);
-        }
-        catch (Exception ex)
-        {
-            LogMenuOverlayStateFailure(ex);
-        }
-
-        object? songEntry = null;
-        if (globalVariables != null)
-        {
-            try
-            {
-                songEntry = _globalVariablesCurrentSongField?.GetValue(globalVariables);
-            }
-            catch (Exception ex)
-            {
-                LogMenuOverlayStateFailure(ex);
-            }
-        }
-
-        if (songEntry == null)
-        {
-            return state;
-        }
-
-        try
-        {
-            SongSpeedInfo songSpeed = ReadSongSpeed();
-            DifficultyInfo difficulty = _runState.CachedDifficulty ?? DifficultyInfo.Default;
-            SongDescriptor song = BuildSongDescriptor(songEntry, songSpeed, difficulty);
-            EnsureSongConfig(song, Array.Empty<SectionDescriptor>());
-
-            _lastMenuOverlayStateFailureMessage = null;
-            state.Song = song;
-        }
-        catch (Exception ex)
-        {
-            LogMenuOverlayStateFailure(ex);
-        }
-
         return state;
     }
 
     private void LogMenuOverlayStateFailure(Exception ex)
     {
+        Exception detail = ex.InnerException ?? ex;
         string message = ex.GetType().Name + " | " + ex.Message;
+        if (!ReferenceEquals(detail, ex))
+        {
+            message += " | inner=" + detail.GetType().Name + " | " + detail.Message;
+        }
+
         if (string.Equals(_lastMenuOverlayStateFailureMessage, message, StringComparison.Ordinal))
         {
             return;
@@ -657,7 +693,7 @@ internal sealed class V1StockTracker
                 alignment = TextAnchor.MiddleCenter
             };
             GUI.Label(new Rect(0f, 0f, Mathf.Max(0f, contentRect.width - infoWidth - 12f), 20f), "Created by Roxas27x", GUI.skin.label);
-            GUI.Label(new Rect(0f, 22f, Mathf.Max(0f, contentRect.width - infoWidth - 12f), 20f), "Home / Ctrl+O / F8 closes this editor.", GUI.skin.label);
+            GUI.Label(new Rect(0f, 22f, Mathf.Max(0f, contentRect.width - infoWidth - 12f), 20f), "Esc / Home / Ctrl+O / F8 closes this editor.", GUI.skin.label);
 
             if (state.Song == null || songConfig == null)
             {
@@ -1803,7 +1839,7 @@ internal sealed class V1StockTracker
             {
                 alignment = TextAnchor.MiddleCenter
             };
-            GUI.Label(previewRect, "Press Home/Ctrl+O to preview", previewStyle);
+            GUI.Label(previewRect, "Press Home/F8/Ctrl+O to preview", previewStyle);
         }
 
         bool confirmClicked = GUI.Toggle(confirmRect, false, new GUIContent("CONFIRM"), GUI.skin.button);
@@ -2424,7 +2460,7 @@ internal sealed class V1StockTracker
             return;
         }
 
-        _dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloneHeroSectionTracker");
+        _dataDir = StatTrackDataPaths.EnsureDataDirectoryMigrated(message => StockTrackerLog.WriteDebug(message));
         _statePath = Path.Combine(_dataDir, "state.json");
         _memoryPath = Path.Combine(_dataDir, "memory.json");
         _configPath = Path.Combine(_dataDir, "config.json");
@@ -2838,6 +2874,7 @@ internal sealed class V1StockTracker
         List<NoteSplitSectionState> noteSplitSections = noteSplitEnabled
             ? BuildNoteSplitSections(sections, songMemory, currentSectionName)
             : new List<NoteSplitSectionState>();
+        GetSongPersonalBestRun(songMemory, out int? songPersonalBestMissCount, out int? songPersonalBestOverstrums);
 
         return new TrackerState
         {
@@ -2869,6 +2906,8 @@ internal sealed class V1StockTracker
             NoteSplitModeEnabled = noteSplitEnabled,
             PreviousSection = _runState.NoteSplitPreviousSection,
             PreviousSectionMissCount = _runState.NoteSplitPreviousSectionMissCount,
+            SongPersonalBestMissCount = songPersonalBestMissCount,
+            SongPersonalBestOverstrums = songPersonalBestOverstrums,
             PreviousSectionResultKind = _runState.NoteSplitPreviousSectionResultKind,
             NoteSplitSections = noteSplitSections,
             EnabledTextExports = enabledTextExports
@@ -3031,7 +3070,7 @@ internal sealed class V1StockTracker
             return;
         }
 
-        if (!TryResolveCurrentSectionNameForExactMiss(out string sectionName))
+        if (!TryResolveCurrentSectionNameForNoteSplitEvent(out string sectionName))
         {
             _runState.PendingNoteSplitMisses++;
             return;
@@ -3041,7 +3080,7 @@ internal sealed class V1StockTracker
         AddNoteSplitMissToSection(sectionName, 1);
     }
 
-    private bool TryResolveCurrentSectionNameForExactMiss(out string sectionName)
+    private bool TryResolveCurrentSectionNameForNoteSplitEvent(out string sectionName)
     {
         sectionName = string.Empty;
         if (_activeGameManager == null || _songTimeField == null)
@@ -4346,7 +4385,7 @@ internal sealed class V1StockTracker
 
         try
         {
-            string dumpsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloneHeroSectionTracker", "dumps");
+            string dumpsDirectory = Path.Combine(_dataDir, "dumps");
             Directory.CreateDirectory(dumpsDirectory);
             string filename = $"{SanitizeFileName(songKey)}-{SanitizeFileName(sourceName)}.chart.txt";
             string dumpPath = Path.Combine(dumpsDirectory, filename);
@@ -5725,7 +5764,7 @@ internal sealed class V1StockTracker
         if (noteSplitEnabled)
         {
             EnsureNoteSplitRunStateInitialized(currentSectionName);
-            AdvanceNoteSplitTracking(songMemory, currentSectionName, !isPractice);
+            AdvanceNoteSplitTracking(songMemory, currentSectionName, currentOverstrums, !isPractice);
         }
         if (!isPractice)
         {
@@ -5799,7 +5838,7 @@ internal sealed class V1StockTracker
             currentOverstrums == 0;
         if (noteSplitEnabled && finishedSong)
         {
-            FinalizeNoteSplitCurrentSection(songMemory, currentSectionName, !isPractice);
+            FinalizeNoteSplitCurrentSection(songMemory, currentSectionName, currentOverstrums, !isPractice);
         }
         if (finishedSong && _runState.FirstMissStreak <= 0)
         {
@@ -5808,6 +5847,14 @@ internal sealed class V1StockTracker
         if (trackSongProgress && !isPractice && finishedSong && fcThisRun)
         {
             CountSectionClear(songMemory, currentSectionName);
+        }
+        if (trackSongProgress && !isPractice && finishedSong)
+        {
+            bool songPersonalBestImproved = TryUpdateSongPersonalBestRun(songMemory, currentMissedNotes, currentOverstrums);
+            if (noteSplitEnabled && songPersonalBestImproved)
+            {
+                ApplyNoteSplitSongPersonalBestSnapshot(songMemory);
+            }
         }
         if (trackCompletedRuns && !isPractice && finishedSong && !_runState.CompletedRunRecorded)
         {
@@ -5856,7 +5903,7 @@ internal sealed class V1StockTracker
         ApplyPendingNoteSplitMisses(currentSectionName);
     }
 
-    private void AdvanceNoteSplitTracking(SongMemory songMemory, string currentSectionName, bool allowMemoryUpdates)
+    private void AdvanceNoteSplitTracking(SongMemory songMemory, string currentSectionName, int currentOverstrums, bool allowMemoryUpdates)
     {
         if (string.IsNullOrWhiteSpace(currentSectionName))
         {
@@ -5877,11 +5924,11 @@ internal sealed class V1StockTracker
         }
 
         ApplyPendingNoteSplitMisses(currentSectionName);
-        CommitNoteSplitSection(songMemory, _runState.NoteSplitCurrentSection, allowMemoryUpdates);
+        CommitNoteSplitSection(songMemory, _runState.NoteSplitCurrentSection, updateFooterSnapshot: true);
         _runState.NoteSplitCurrentSection = currentSectionName;
     }
 
-    private void FinalizeNoteSplitCurrentSection(SongMemory songMemory, string currentSectionName, bool allowMemoryUpdates)
+    private void FinalizeNoteSplitCurrentSection(SongMemory songMemory, string currentSectionName, int currentOverstrums, bool allowMemoryUpdates)
     {
         string sectionName = string.IsNullOrWhiteSpace(_runState.NoteSplitCurrentSection)
             ? currentSectionName
@@ -5892,10 +5939,10 @@ internal sealed class V1StockTracker
         }
 
         ApplyPendingNoteSplitMisses(sectionName);
-        CommitNoteSplitSection(songMemory, sectionName, allowMemoryUpdates);
+        CommitNoteSplitSection(songMemory, sectionName, updateFooterSnapshot: false);
     }
 
-    private void CommitNoteSplitSection(SongMemory songMemory, string sectionName, bool allowMemoryUpdates)
+    private void CommitNoteSplitSection(SongMemory songMemory, string sectionName, bool updateFooterSnapshot)
     {
         if (string.IsNullOrWhiteSpace(sectionName) ||
             _runState.NoteSplitSectionsThisRun.ContainsKey(sectionName))
@@ -5914,15 +5961,12 @@ internal sealed class V1StockTracker
             MissCount = sectionMissCount,
             ResultKind = resultKind
         };
-        _runState.NoteSplitPreviousSection = sectionName;
-        _runState.NoteSplitPreviousSectionMissCount = sectionMissCount;
-        _runState.NoteSplitPreviousSectionResultKind = resultKind;
 
-        if (allowMemoryUpdates &&
-            (!sectionMemory.BestMissCount.HasValue || sectionMissCount < sectionMemory.BestMissCount.Value))
+        if (updateFooterSnapshot)
         {
-            sectionMemory.BestMissCount = sectionMissCount;
-            MarkMemoryDirty();
+            _runState.NoteSplitPreviousSection = sectionName;
+            _runState.NoteSplitPreviousSectionMissCount = sectionMissCount;
+            _runState.NoteSplitPreviousSectionResultKind = resultKind;
         }
     }
 
@@ -5946,6 +5990,62 @@ internal sealed class V1StockTracker
         }
 
         return NoteSplitResultKind.Worse;
+    }
+
+    private bool TryUpdateSongPersonalBestRun(SongMemory songMemory, int currentMissedNotes, int currentOverstrums)
+    {
+        int clampedMissedNotes = Math.Max(0, currentMissedNotes);
+        int clampedOverstrums = Math.Max(0, currentOverstrums);
+        GetSongPersonalBestRun(songMemory, out int? bestMissCount, out int? bestOverstrums);
+        bool improved =
+            !bestMissCount.HasValue ||
+            clampedMissedNotes < bestMissCount.Value ||
+            (clampedMissedNotes == bestMissCount.Value &&
+             (!bestOverstrums.HasValue || clampedOverstrums < bestOverstrums.Value));
+        if (!improved)
+        {
+            return false;
+        }
+
+        songMemory.BestRunMissedNotes = clampedMissedNotes;
+        songMemory.BestRunOverstrums = clampedOverstrums;
+        MarkMemoryDirty();
+        return true;
+    }
+
+    private void ApplyNoteSplitSongPersonalBestSnapshot(SongMemory songMemory)
+    {
+        foreach (KeyValuePair<string, NoteSplitSectionRunState> pair in _runState.NoteSplitSectionsThisRun)
+        {
+            SectionMemory sectionMemory = EnsureSectionMemory(songMemory, pair.Key);
+            sectionMemory.BestMissCount = pair.Value.MissCount;
+        }
+
+        MarkMemoryDirty();
+    }
+
+    private static void GetSongPersonalBestRun(SongMemory songMemory, out int? bestMissCount, out int? bestOverstrums)
+    {
+        bestMissCount = songMemory.BestRunMissedNotes;
+        bestOverstrums = songMemory.BestRunOverstrums;
+
+        foreach (CompletedRunRecord run in songMemory.CompletedRuns)
+        {
+            int runMissedNotes = Math.Max(0, run.MissedNotes);
+            int runOverstrums = Math.Max(0, run.Overstrums);
+            bool improved =
+                !bestMissCount.HasValue ||
+                runMissedNotes < bestMissCount.Value ||
+                (runMissedNotes == bestMissCount.Value &&
+                 (!bestOverstrums.HasValue || runOverstrums < bestOverstrums.Value));
+            if (!improved)
+            {
+                continue;
+            }
+
+            bestMissCount = runMissedNotes;
+            bestOverstrums = runOverstrums;
+        }
     }
 
     private void CountSectionAttempt(SongMemory songMemory, string sectionName)
@@ -6851,8 +6951,37 @@ internal sealed class V1StockTracker
         }
     }
 
-    private static string? GetStringProperty(object obj, string propertyName) => obj.GetType().GetProperty(propertyName, AnyInstance)?.GetValue(obj, null)?.ToString();
-    private static string? GetStringField(object obj, string fieldName) => obj.GetType().GetField(fieldName, AnyInstance)?.GetValue(obj)?.ToString();
+    private static bool HasSongIdentity(object songEntry)
+    {
+        return !string.IsNullOrWhiteSpace(GetStringProperty(songEntry, "Name_StrippedTags")) ||
+            !string.IsNullOrWhiteSpace(GetStringProperty(songEntry, "Name")) ||
+            !string.IsNullOrWhiteSpace(GetStringProperty(songEntry, "checksumString")) ||
+            !string.IsNullOrWhiteSpace(GetStringField(songEntry, "folderPath"));
+    }
+
+    private static string? GetStringProperty(object obj, string propertyName)
+    {
+        try
+        {
+            return obj.GetType().GetProperty(propertyName, AnyInstance)?.GetValue(obj, null)?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? GetStringField(object obj, string fieldName)
+    {
+        try
+        {
+            return obj.GetType().GetField(fieldName, AnyInstance)?.GetValue(obj)?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
     private static object? SafeGetPropertyValue(PropertyInfo property, object instance)
     {
         try
@@ -6932,6 +7061,8 @@ public sealed class TrackerState
     public bool NoteSplitModeEnabled { get; set; }
     public string PreviousSection { get; set; } = string.Empty;
     public int? PreviousSectionMissCount { get; set; }
+    public int? SongPersonalBestMissCount { get; set; }
+    public int? SongPersonalBestOverstrums { get; set; }
     public string PreviousSectionResultKind { get; set; } = NoteSplitResultKind.None;
     public List<NoteSplitSectionState> NoteSplitSections { get; set; } = new();
     [JsonIgnore]
@@ -7141,6 +7272,8 @@ public sealed class SongMemory
     public int Restarts { get; set; }
     public int LifetimeGhostedNotes { get; set; }
     public int BestStreak { get; set; }
+    public int? BestRunMissedNotes { get; set; }
+    public int? BestRunOverstrums { get; set; }
     public bool FcAchieved { get; set; }
     public Dictionary<string, SectionMemory> Sections { get; set; } = new();
     public List<CompletedRunRecord> CompletedRuns { get; set; } = new();
@@ -7186,6 +7319,7 @@ public sealed class SectionMemory
     public int Attempts { get; set; }
     public int KilledTheRun { get; set; }
     public int? BestMissCount { get; set; }
+    public int? BestMissOverstrums { get; set; }
 
     [JsonProperty("Deaths")]
     private int LegacyDeaths
@@ -7255,9 +7389,12 @@ internal sealed class RunState
     public int PendingNoteSplitMisses { get; set; }
     public string NoteSplitPreviousSection { get; set; } = string.Empty;
     public int? NoteSplitPreviousSectionMissCount { get; set; }
+    public int? NoteSplitPreviousSectionPersonalBestMissCount { get; set; }
+    public int? NoteSplitPreviousSectionPersonalBestOverstrums { get; set; }
     public string NoteSplitPreviousSectionResultKind { get; set; } = NoteSplitResultKind.None;
     public Dictionary<string, int> NoteSplitMissCountsBySectionThisRun { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, NoteSplitSectionRunState> NoteSplitSectionsThisRun { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, PendingNoteSplitBestOverstrumBackfill> PendingNoteSplitBestOverstrumBackfills { get; } = new(StringComparer.Ordinal);
     public HashSet<string> CountedSectionsThisRun { get; } = new(StringComparer.Ordinal);
     public HashSet<string> CountedSectionAttemptsThisRun { get; } = new(StringComparer.Ordinal);
 }
@@ -7277,6 +7414,19 @@ internal sealed class NoteSplitSectionRunState
 {
     public int MissCount { get; set; }
     public string ResultKind { get; set; } = NoteSplitResultKind.None;
+}
+
+internal sealed class PendingNoteSplitBestOverstrumBackfill
+{
+    public int MissCount { get; set; }
+    public string Mode { get; set; } = NoteSplitBestOverstrumBackfillMode.FillMissingOverstrums;
+}
+
+internal static class NoteSplitBestOverstrumBackfillMode
+{
+    public const string NewBestMiss = "new_best_miss";
+    public const string FillMissingOverstrums = "fill_missing_overstrums";
+    public const string BetterOverstrumsSameMiss = "better_overstrums_same_miss";
 }
 
 internal static class NoteSplitResultKind

@@ -16,13 +16,63 @@ using System.Windows.Forms;
 
 namespace CloneHeroSectionTracker.DesktopOverlay;
 
+internal static class StatTrackDataPaths
+{
+    internal const string CurrentDirectoryName = "StatTrack";
+    internal const string LegacyDirectoryName = "CloneHeroSectionTracker";
+
+    internal static string EnsureDataDirectoryMigrated()
+    {
+        string currentDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), CurrentDirectoryName);
+        string legacyDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), LegacyDirectoryName);
+        if (!Directory.Exists(legacyDir))
+        {
+            return currentDir;
+        }
+
+        MergeDirectoryContents(legacyDir, currentDir);
+        return currentDir;
+    }
+
+    private static void MergeDirectoryContents(string sourceDir, string destinationDir)
+    {
+        Directory.CreateDirectory(destinationDir);
+
+        foreach (string filePath in Directory.GetFiles(sourceDir))
+        {
+            string destinationPath = Path.Combine(destinationDir, Path.GetFileName(filePath));
+            string? destinationParent = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrEmpty(destinationParent))
+            {
+                Directory.CreateDirectory(destinationParent);
+            }
+
+            if (!File.Exists(destinationPath))
+            {
+                File.Copy(filePath, destinationPath, overwrite: false);
+            }
+        }
+
+        foreach (string directoryPath in Directory.GetDirectories(sourceDir))
+        {
+            string directoryName = Path.GetFileName(directoryPath);
+            if (string.IsNullOrEmpty(directoryName))
+            {
+                continue;
+            }
+
+            MergeDirectoryContents(directoryPath, Path.Combine(destinationDir, directoryName));
+        }
+    }
+}
+
 internal static class Program
 {
     [STAThread]
     private static void Main(string[] args)
     {
         int gameProcessId = 0;
-        string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloneHeroSectionTracker");
+        string dataDir = StatTrackDataPaths.EnsureDataDirectoryMigrated();
         for (int i = 0; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--pid", StringComparison.OrdinalIgnoreCase) &&
@@ -907,7 +957,7 @@ internal static class NoteSplitRenderer
     {
         const float padding = 10f;
         const float headerHeight = 58f;
-        const float footerHeight = 94f;
+        const float footerHeight = 112f;
         using var backgroundBrush = new SolidBrush(Color.FromArgb(238, 8, 8, 8));
         using var borderPen = new Pen(GetBorderColor(style), 1f);
         graphics.FillRectangle(backgroundBrush, rect);
@@ -995,12 +1045,27 @@ internal static class NoteSplitRenderer
         }
 
         RectangleF totalRect = new RectangleF(rect.X + padding, rect.Bottom - footerHeight + 4f, rect.Width - (padding * 2f), 50f);
+        RectangleF personalBestRect = new RectangleF(rect.X + padding, rect.Bottom - 48f, rect.Width - (padding * 2f), 16f);
         RectangleF previousRect = new RectangleF(rect.X + padding, rect.Bottom - 28f, rect.Width - (padding * 2f), 18f);
         using (var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold))
         using (var totalBrush = new SolidBrush(state.CurrentMissedNotes == 0 ? Color.FromArgb(255, 255, 214, 84) : Color.FromArgb(255, 236, 86, 86)))
         using (var totalFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
         {
             graphics.DrawString(state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture), totalFont, totalBrush, totalRect, totalFormat);
+        }
+
+        string personalBestValue = FormatPersonalBestSummary(state.SongPersonalBestMissCount, state.SongPersonalBestOverstrums);
+        using (var personalBestFont = CreateFont(style, 11f, FontStyle.Regular))
+        using (var personalBestValueFont = CreateFont(style, 12f, FontStyle.Bold))
+        using (var labelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194)))
+        using (var valueBrush = new SolidBrush(Color.White))
+        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
+        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+        {
+            RectangleF personalBestLabelRect = new RectangleF(personalBestRect.X, personalBestRect.Y, Math.Max(40f, personalBestRect.Width - 120f), personalBestRect.Height);
+            RectangleF personalBestValueRect = new RectangleF(personalBestRect.Right - 112f, personalBestRect.Y, 112f, personalBestRect.Height);
+            graphics.DrawString("PB:", personalBestFont, labelBrush, personalBestLabelRect, leftFormat);
+            graphics.DrawString(personalBestValue, personalBestValueFont, valueBrush, personalBestValueRect, rightFormat);
         }
 
         string previousLabel = string.IsNullOrWhiteSpace(state.PreviousSection)
@@ -1082,6 +1147,19 @@ internal static class NoteSplitRenderer
         return missCount <= 0
             ? "0"
             : "-" + missCount.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatPersonalBestSummary(int? bestMissCount, int? bestRunOverstrums)
+    {
+        if (!bestMissCount.HasValue)
+        {
+            return "--";
+        }
+
+        string overstrumText = bestRunOverstrums.HasValue
+            ? bestRunOverstrums.Value.ToString(CultureInfo.InvariantCulture)
+            : "--";
+        return FormatSectionValue(bestMissCount.Value) + " " + overstrumText + " OS";
     }
 
     private static Color GetResultColor(string? resultKind, int? missCount)
@@ -1696,6 +1774,8 @@ internal sealed class OverlayTrackerState
     public bool NoteSplitModeEnabled { get; set; }
     public string? PreviousSection { get; set; }
     public int? PreviousSectionMissCount { get; set; }
+    public int? SongPersonalBestMissCount { get; set; }
+    public int? SongPersonalBestOverstrums { get; set; }
     public string? PreviousSectionResultKind { get; set; }
     public List<OverlayNoteSplitSectionState> NoteSplitSections { get; set; } = new();
     public OverlaySongDescriptor? Song { get; set; }

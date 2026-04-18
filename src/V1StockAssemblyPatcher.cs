@@ -11,6 +11,7 @@ using System.Linq;
 internal static class V1StockAssemblyPatcher
 {
     private const string HookAssemblyName = "StatTrack";
+    private const string LegacyHookAssemblyName = "CloneHeroV1StockTracker";
     private const string HookTypeName = "CloneHeroSectionTracker.V1Stock.StockTrackerHooks";
     private const string UpdateHookMethodName = "OnGameManagerUpdate";
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
@@ -181,7 +182,12 @@ internal static class V1StockAssemblyPatcher
 
         int patchesApplied = 0;
         MethodReference importedUpdateHook = targetModule.ImportReference(updateHookMethod);
-        if (!HasHookCall(updateMethod, UpdateHookMethodName))
+        if (RewriteLegacyHookCalls(updateMethod, UpdateHookMethodName, importedUpdateHook))
+        {
+            patchesApplied++;
+        }
+
+        if (!HasDesiredHookCall(updateMethod, UpdateHookMethodName))
         {
             InsertSingleArgHook(updateMethod, importedUpdateHook);
             patchesApplied++;
@@ -202,7 +208,12 @@ internal static class V1StockAssemblyPatcher
         }
 
         MethodReference importedMainMenuHook = targetModule.ImportReference(mainMenuHookMethod);
-        if (!HasHookCall(mainMenuUpdateMethod, MainMenuHookMethodName))
+        if (RewriteLegacyHookCalls(mainMenuUpdateMethod, MainMenuHookMethodName, importedMainMenuHook))
+        {
+            patchesApplied++;
+        }
+
+        if (!HasDesiredHookCall(mainMenuUpdateMethod, MainMenuHookMethodName))
         {
             InsertSingleArgHook(mainMenuUpdateMethod, importedMainMenuHook);
             patchesApplied++;
@@ -230,7 +241,7 @@ internal static class V1StockAssemblyPatcher
             return 1;
         }
 
-        MethodDefinition? noteMissMethod = basePlayer.Methods.FirstOrDefault(method => HasHookCall(method, NoteMissHookMethodName))
+        MethodDefinition? noteMissMethod = basePlayer.Methods.FirstOrDefault(method => HasAnyHookCall(method, NoteMissHookMethodName))
             ?? basePlayer.Methods.FirstOrDefault(IsBasePlayerMissMethod);
         if (noteMissMethod == null)
         {
@@ -239,9 +250,19 @@ internal static class V1StockAssemblyPatcher
         }
 
         MethodReference importedNoteMissHook = targetModule.ImportReference(noteMissHookMethod);
-        if (!HasHookCall(noteMissMethod, NoteMissHookMethodName))
+        if (RewriteLegacyHookCalls(noteMissMethod, NoteMissHookMethodName, importedNoteMissHook))
+        {
+            patchesApplied++;
+        }
+
+        if (!HasDesiredHookCall(noteMissMethod, NoteMissHookMethodName))
         {
             InsertTwoArgHook(noteMissMethod, importedNoteMissHook);
+            patchesApplied++;
+        }
+
+        if (RemoveAssemblyReference(targetModule, LegacyHookAssemblyName))
+        {
             patchesApplied++;
         }
 
@@ -277,24 +298,106 @@ internal static class V1StockAssemblyPatcher
         method.Body.OptimizeMacros();
     }
 
-    private static bool HasHookCall(MethodDefinition method, string hookMethodName)
+    private static bool HasDesiredHookCall(MethodDefinition method, string hookMethodName)
     {
         if (method == null || !method.HasBody)
         {
             return false;
         }
 
-        return method.Body.Instructions.Any(instruction => IsHookCall(instruction, hookMethodName));
+        return method.Body.Instructions.Any(instruction => IsDesiredHookCall(instruction, hookMethodName));
     }
 
-    private static bool IsHookCall(Instruction instruction, string hookMethodName)
+    private static bool HasAnyHookCall(MethodDefinition method, string hookMethodName)
+    {
+        if (method == null || !method.HasBody)
+        {
+            return false;
+        }
+
+        return method.Body.Instructions.Any(instruction =>
+            instruction.OpCode == OpCodes.Call &&
+            instruction.Operand is MethodReference calledMethod &&
+            IsHookMethod(calledMethod, hookMethodName));
+    }
+
+    private static bool IsDesiredHookCall(Instruction instruction, string hookMethodName)
     {
         if (instruction.OpCode != OpCodes.Call || instruction.Operand is not MethodReference calledMethod)
         {
             return false;
         }
 
-        return calledMethod.Name == hookMethodName && calledMethod.DeclaringType.FullName == HookTypeName;
+        return IsHookMethod(calledMethod, hookMethodName) &&
+            string.Equals(GetScopeAssemblyName(calledMethod.DeclaringType.Scope), HookAssemblyName, StringComparison.Ordinal);
+    }
+
+    private static bool RewriteLegacyHookCalls(MethodDefinition method, string hookMethodName, MethodReference desiredHook)
+    {
+        if (method == null || !method.HasBody)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        foreach (Instruction instruction in method.Body.Instructions)
+        {
+            if (instruction.OpCode != OpCodes.Call || instruction.Operand is not MethodReference calledMethod)
+            {
+                continue;
+            }
+
+            if (!IsHookMethod(calledMethod, hookMethodName))
+            {
+                continue;
+            }
+
+            string scopeAssemblyName = GetScopeAssemblyName(calledMethod.DeclaringType.Scope);
+            if (string.Equals(scopeAssemblyName, HookAssemblyName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            instruction.Operand = desiredHook;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            method.Body.SimplifyMacros();
+            method.Body.OptimizeMacros();
+        }
+
+        return changed;
+    }
+
+    private static bool IsHookMethod(MethodReference calledMethod, string hookMethodName)
+    {
+        return calledMethod.Name == hookMethodName &&
+            calledMethod.DeclaringType.FullName == HookTypeName;
+    }
+
+    private static string GetScopeAssemblyName(IMetadataScope? scope)
+    {
+        return scope switch
+        {
+            AssemblyNameReference assemblyNameReference => assemblyNameReference.Name ?? string.Empty,
+            ModuleDefinition module when module.Assembly != null => module.Assembly.Name.Name ?? string.Empty,
+            _ => string.Empty
+        };
+    }
+
+    private static bool RemoveAssemblyReference(ModuleDefinition module, string assemblyName)
+    {
+        AssemblyNameReference? reference = module.AssemblyReferences.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, assemblyName, StringComparison.Ordinal));
+        if (reference == null)
+        {
+            return false;
+        }
+
+        module.AssemblyReferences.Remove(reference);
+        return true;
     }
 
     private static bool IsBasePlayerMissMethod(MethodDefinition method)

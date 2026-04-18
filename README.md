@@ -9,14 +9,14 @@ It adds:
 - optional NoteSplit Mode, a separate LiveSplit-style window for section miss-count splits and section personal bests
 - opt-in OBS text exports for the stats and live section data you actually want on stream
 
-The tracker saves its data to `%LOCALAPPDATA%\CloneHeroSectionTracker` and only writes OBS files for the exports and section outputs the player actually enables.
+The tracker saves its data to `%LOCALAPPDATA%\StatTrack`, automatically migrates older `%LOCALAPPDATA%\CloneHeroSectionTracker` installs on first launch, and only writes OBS files for the exports and section outputs the player actually enables.
 
 ## How It Works
 
 The release uses three main files:
 
 - `StatTrack.dll`
-  The injected gameplay tracker. It reads live Clone Hero state, tracks runs, sections, misses, overstrums, ghost notes, streaks, completed runs, and NoteSplit personal bests, then saves that state to `%LOCALAPPDATA%\CloneHeroSectionTracker` and writes the OBS exports you enable.
+  The injected gameplay tracker. It reads live Clone Hero state, tracks runs, sections, misses, overstrums, ghost notes, streaks, completed runs, and NoteSplit personal bests, then saves that state to `%LOCALAPPDATA%\StatTrack` and writes the OBS exports you enable.
 - `V1StockAssemblyPatcher.exe`
   The install-time patcher for `Assembly-CSharp.dll`. It adds the hooks that load the tracker on startup, wires the tracker into the game update and miss paths it needs, and applies the controller-unplug patch so Clone Hero does not auto-pause when an input device disconnects mid-song.
 - `StatTrackOverlay.exe`
@@ -33,7 +33,7 @@ These dropdowns use the same names as the live GUI so screenshots can be added u
 <details>
 <summary><code>OBS EXPORT FOLDER</code></summary>
 
-Opens `%LOCALAPPDATA%\CloneHeroSectionTracker`, which contains the live `obs` export folder plus `state.json`, `memory.json`, `config.json`, and `desktop-style.json`.
+Opens `%LOCALAPPDATA%\StatTrack`, which contains the live `obs` export folder plus `state.json`, `memory.json`, `config.json`, and `desktop-style.json`.
 </details>
 
 <details>
@@ -266,7 +266,9 @@ The release pack also includes:
 
 ## Data Files
 
-The tracker writes to `%LOCALAPPDATA%\CloneHeroSectionTracker`.
+The tracker writes to `%LOCALAPPDATA%\StatTrack`.
+
+Older installs automatically migrate `%LOCALAPPDATA%\CloneHeroSectionTracker` into that folder on first launch.
 
 That folder contains:
 - `state.json`
@@ -280,4 +282,4 @@ That folder contains:
 - OBS exports are opt-in from the overlay editor.
 - Completed runs are always stored in `memory.json`, but the OBS `runs` folder is only written when that export is enabled.
 - The desktop overlay works best in borderless or windowed mode.
-- The uninstallers restore the backed up `Assembly-CSharp.dll` and remove the tracker files. The full cleanup option also deletes `%LOCALAPPDATA%\CloneHeroSectionTracker`.
+- The uninstallers restore the backed up `Assembly-CSharp.dll` and remove the tracker files. The full cleanup option also deletes `%LOCALAPPDATA%\StatTrack` and any leftover legacy `%LOCALAPPDATA%\CloneHeroSectionTracker` folder.

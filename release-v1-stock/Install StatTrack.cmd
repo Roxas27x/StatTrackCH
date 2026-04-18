@@ -66,6 +66,13 @@ if not exist "%BACKUP_ASSEMBLY_PATH%" (
     )
 )
 
+copy /y "%BACKUP_ASSEMBLY_PATH%" "%ASSEMBLY_PATH%" >nul
+if errorlevel 1 (
+    echo Failed to restore clean Assembly-CSharp.dll from backup:
+    echo %BACKUP_ASSEMBLY_PATH%
+    goto fail
+)
+
 "%RUNTIME_CHECKER_EXE%" "%STOCK_DLL%" "%MANAGED_DIR%"
 if errorlevel 1 (
     echo Runtime compatibility check failed for:

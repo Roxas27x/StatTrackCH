@@ -35,6 +35,7 @@ function Resolve-GameDir {
 $gameDir = Resolve-GameDir
 $managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
 $assemblyPath = Join-Path $managedDir "Assembly-CSharp.dll"
+$backupAssemblyPath = Join-Path $managedDir "Assembly-CSharp.sectiontracker-backup.dll"
 $targetHookDll = Join-Path $managedDir "StatTrack.dll"
 $targetOverlayExe = Join-Path $managedDir "StatTrackOverlay.exe"
 $legacyHookDll = Join-Path $managedDir "CloneHeroV1StockTracker.dll"
@@ -48,6 +49,10 @@ if (-not (Test-Path $buildScript)) {
 
 if (-not (Test-Path $assemblyPath)) {
     throw "Missing target assembly: $assemblyPath"
+}
+
+if (Test-Path $backupAssemblyPath) {
+    Copy-Item -LiteralPath $backupAssemblyPath -Destination $assemblyPath -Force
 }
 
 foreach ($legacyPath in @($legacyHookDll, $legacyOverlayExe)) {

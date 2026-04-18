@@ -64,16 +64,8 @@ if exist "%LEGACY_HOOK_DLL%" del /f /q "%LEGACY_HOOK_DLL%" >nul 2>&1
 if exist "%LEGACY_OVERLAY_EXE%" del /f /q "%LEGACY_OVERLAY_EXE%" >nul 2>&1
 
 if defined WIPE_DATA (
-    set "TRACKER_DATA_DIR=%LOCALAPPDATA%\CloneHeroSectionTracker"
-    if exist "%TRACKER_DATA_DIR%" (
-        rmdir /s /q "%TRACKER_DATA_DIR%"
-        if errorlevel 1 (
-            echo Failed to remove tracker data:
-            echo %TRACKER_DATA_DIR%
-            goto fail
-        )
-        echo Removed tracker data from %TRACKER_DATA_DIR%
-    )
+    call :removeDataDir "%LOCALAPPDATA%\StatTrack" || goto fail
+    call :removeDataDir "%LOCALAPPDATA%\CloneHeroSectionTracker" || goto fail
 )
 
 echo.
@@ -98,6 +90,20 @@ if not exist "%GAME_DIR%\Clone Hero.exe" (
     echo The selected folder does not contain "Clone Hero.exe".
     set "GAME_DIR="
     goto resolveGameDir
+)
+exit /b 0
+
+:removeDataDir
+set "TRACKER_DATA_DIR=%~1"
+if not defined TRACKER_DATA_DIR exit /b 0
+if exist "%TRACKER_DATA_DIR%" (
+    rmdir /s /q "%TRACKER_DATA_DIR%"
+    if errorlevel 1 (
+        echo Failed to remove tracker data:
+        echo %TRACKER_DATA_DIR%
+        exit /b 1
+    )
+    echo Removed tracker data from %TRACKER_DATA_DIR%
 )
 exit /b 0
 

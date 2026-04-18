@@ -158,7 +158,8 @@ internal static class Program
         }
 
         string name = assemblyName.Name ?? string.Empty;
-        return !string.Equals(name, "CloneHeroV1StockTracker", StringComparison.OrdinalIgnoreCase);
+        return !string.Equals(name, "CloneHeroV1StockTracker", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(name, "StatTrack", StringComparison.OrdinalIgnoreCase);
     }
 
     private static AssemblyNameReference? GetAssemblyName(TypeReference typeReference)

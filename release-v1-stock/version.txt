@@ -1,5 +1,5 @@
-Clone Hero Section Tracker
+StatTrack
 Release: v1.0.0.4080 - OBS FRIENDLY VERSION
 Base Game: Clone Hero v1.0.0.4080-final
 Overlay Hotkeys: Home / Ctrl+O / F8
-Data Folder: %LOCALAPPDATA%\CloneHeroSectionTracker
+Data Folder: %LOCALAPPDATA%\StatTrack

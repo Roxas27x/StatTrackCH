@@ -30,7 +30,7 @@ Overlay hotkeys
 
 Tracker data location
 The tracker stores its files in:
-%LOCALAPPDATA%\CloneHeroSectionTracker
+%LOCALAPPDATA%\StatTrack
 
 That folder contains:
 - state.json
@@ -38,6 +38,9 @@ That folder contains:
 - config.json
 - desktop-style.json
 - obs\...
+
+Older installs automatically migrate data from:
+%LOCALAPPDATA%\CloneHeroSectionTracker
 
 A few quick notes
 - OBS exports are off by default. Turn on only the ones you actually want.
@@ -50,4 +53,4 @@ Uninstall
 3. Type or paste the same Clone Hero folder you installed into.
 
 Optional full cleanup
-- Double-click "Uninstall StatTrack and Wipe Data.cmd" to also delete %LOCALAPPDATA%\CloneHeroSectionTracker
+- Double-click "Uninstall StatTrack and Wipe Data.cmd" to also delete %LOCALAPPDATA%\StatTrack
