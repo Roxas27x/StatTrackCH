@@ -69,6 +69,7 @@ internal sealed class DesktopOverlayForm : Form
     private OverlayTrackerConfig _config = new();
     private DesktopOverlayStyle _style = new();
     private string? _lastVisibilityReason;
+    private NoteSplitWindowForm? _noteSplitWindow;
     public DesktopOverlayForm(int gameProcessId, string dataDir)
     {
         _gameProcessId = gameProcessId;
@@ -87,10 +88,12 @@ internal sealed class DesktopOverlayForm : Form
         DoubleBuffered = true;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
         Bounds = new Rectangle(-2000, -2000, 16, 16);
+        _styleStatic = _style;
 
         _timer = new System.Windows.Forms.Timer { Interval = 100 };
         _timer.Tick += (_, _) => OnTimerTick();
         _timer.Start();
+        EnsureNoteSplitWindow();
 
         Log("Desktop overlay started | pid=" + _gameProcessId);
     }
@@ -109,6 +112,16 @@ internal sealed class DesktopOverlayForm : Form
         }
     }
 
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        if (_noteSplitWindow != null && !_noteSplitWindow.IsDisposed)
+        {
+            _noteSplitWindow.Close();
+        }
+
+        base.OnFormClosed(e);
+    }
+
     private void OnTimerTick()
     {
         try
@@ -116,6 +129,10 @@ internal sealed class DesktopOverlayForm : Form
             if (!TryRefreshGameProcess())
             {
                 LogVisibility("game_process_missing");
+                if (_noteSplitWindow != null && !_noteSplitWindow.IsDisposed)
+                {
+                    _noteSplitWindow.Hide();
+                }
                 Close();
                 return;
             }
@@ -123,6 +140,14 @@ internal sealed class DesktopOverlayForm : Form
             bool stateChanged = RefreshState();
             bool configChanged = RefreshConfig();
             bool styleChanged = RefreshStyle();
+            bool noteSplitVisible = IsNoteSplitWindowVisible(_state);
+            bool hasGameClientBounds = TryGetGameClientBounds(out Rectangle gameClientBounds);
+            EnsureNoteSplitWindow().Synchronize(
+                _state,
+                _style,
+                noteSplitVisible,
+                hasGameClientBounds ? gameClientBounds : Rectangle.Empty,
+                stateChanged || styleChanged || configChanged);
 
             if (!TryGetVisibleClientBounds(out Rectangle clientBounds, out string visibilityReason))
             {
@@ -131,11 +156,9 @@ internal sealed class DesktopOverlayForm : Form
                 return;
             }
 
-            if (_state == null ||
-                !_state.IsInSong ||
-                _state.OverlayEditorVisible ||
-                _state.Song == null ||
-                ResolveSongConfig(_state) == null)
+            OverlaySongConfig? songConfig = ResolveSongConfig(_state);
+            bool widgetVisible = IsWidgetOverlayVisible(_state, songConfig);
+            if (!widgetVisible)
             {
                 Region = null;
                 LogVisibility(GetStateVisibilityReason());
@@ -143,17 +166,16 @@ internal sealed class DesktopOverlayForm : Form
                 return;
             }
 
-            OverlaySongConfig songConfig = ResolveSongConfig(_state)!;
-            if (configChanged || Region == null || !Visible)
-            {
-                UpdateOverlayRegion(songConfig, false);
-            }
-
             bool boundsChanged = Bounds != clientBounds;
             if (Bounds != clientBounds)
             {
                 Bounds = clientBounds;
                 Log("Desktop overlay bounds | x=" + clientBounds.X + " | y=" + clientBounds.Y + " | w=" + clientBounds.Width + " | h=" + clientBounds.Height);
+            }
+
+            if (configChanged || Region == null || !Visible || boundsChanged)
+            {
+                UpdateOverlayRegion(songConfig);
             }
 
             bool becameVisible = false;
@@ -173,6 +195,10 @@ internal sealed class DesktopOverlayForm : Form
         {
             LogVisibility("exception_hidden");
             Log("Desktop overlay exception | " + ex);
+            if (_noteSplitWindow != null && !_noteSplitWindow.IsDisposed)
+            {
+                _noteSplitWindow.Hide();
+            }
             Hide();
         }
     }
@@ -310,6 +336,106 @@ internal sealed class DesktopOverlayForm : Form
         }
     }
 
+    private NoteSplitWindowForm EnsureNoteSplitWindow()
+    {
+        if (_noteSplitWindow != null && !_noteSplitWindow.IsDisposed)
+        {
+            return _noteSplitWindow;
+        }
+
+        _noteSplitWindow = new NoteSplitWindowForm(CloneStyle(_style), SaveStyle, Log, SetNoteSplitDialogActive);
+        return _noteSplitWindow;
+    }
+
+    private void SetNoteSplitDialogActive(bool active)
+    {
+        if (active)
+        {
+            if (_timer.Enabled)
+            {
+                _timer.Stop();
+            }
+
+            return;
+        }
+
+        if (!_timer.Enabled)
+        {
+            _timer.Start();
+        }
+
+        OnTimerTick();
+    }
+
+    private void SaveStyle(DesktopOverlayStyle updatedStyle)
+    {
+        _style = CloneStyle(updatedStyle);
+        _styleStatic = _style;
+        WriteStyleFile();
+    }
+
+    private void WriteStyleFile()
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_stylePath);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            File.WriteAllText(_stylePath, Json.Serialize(_style));
+            _lastStyleWriteUtc = File.GetLastWriteTimeUtc(_stylePath);
+        }
+        catch
+        {
+        }
+    }
+
+    private static DesktopOverlayStyle CloneStyle(DesktopOverlayStyle style)
+    {
+        return new DesktopOverlayStyle
+        {
+            BorderR = style.BorderR,
+            BorderG = style.BorderG,
+            BorderB = style.BorderB,
+            BorderA = style.BorderA,
+            NoteSplitX = style.NoteSplitX,
+            NoteSplitY = style.NoteSplitY,
+            NoteSplitWidth = style.NoteSplitWidth,
+            NoteSplitHeight = style.NoteSplitHeight,
+            NoteSplitFontFamily = style.NoteSplitFontFamily,
+            NoteSplitFontScale = style.NoteSplitFontScale,
+            NoteSplitTopMost = style.NoteSplitTopMost
+        };
+    }
+
+    private bool TryGetGameClientBounds(out Rectangle bounds)
+    {
+        bounds = Rectangle.Empty;
+        IntPtr targetWindow = GetGameWindowHandle();
+        if (targetWindow == IntPtr.Zero || NativeMethods.IsIconic(targetWindow))
+        {
+            return false;
+        }
+
+        if (!NativeMethods.GetClientRect(targetWindow, out NativeMethods.RECT clientRect))
+        {
+            return false;
+        }
+
+        NativeMethods.POINT topLeft = new() { X = clientRect.Left, Y = clientRect.Top };
+        NativeMethods.POINT bottomRight = new() { X = clientRect.Right, Y = clientRect.Bottom };
+        if (!NativeMethods.ClientToScreen(targetWindow, ref topLeft) ||
+            !NativeMethods.ClientToScreen(targetWindow, ref bottomRight))
+        {
+            return false;
+        }
+
+        bounds = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
+        return bounds.Width > 0 && bounds.Height > 0;
+    }
+
 
     private bool TryGetVisibleClientBounds(out Rectangle bounds, out string reason)
     {
@@ -329,37 +455,9 @@ internal sealed class DesktopOverlayForm : Form
             return false;
         }
 
-        IntPtr targetWindow = GetGameWindowHandle();
-        if (targetWindow == IntPtr.Zero)
+        if (!TryGetGameClientBounds(out bounds))
         {
-            targetWindow = foreground;
-        }
-
-        if (NativeMethods.IsIconic(targetWindow))
-        {
-            reason = "game_minimized";
-            return false;
-        }
-
-        if (!NativeMethods.GetClientRect(targetWindow, out NativeMethods.RECT clientRect))
-        {
-            reason = "client_rect_failed";
-            return false;
-        }
-
-        NativeMethods.POINT topLeft = new() { X = clientRect.Left, Y = clientRect.Top };
-        NativeMethods.POINT bottomRight = new() { X = clientRect.Right, Y = clientRect.Bottom };
-        if (!NativeMethods.ClientToScreen(targetWindow, ref topLeft) ||
-            !NativeMethods.ClientToScreen(targetWindow, ref bottomRight))
-        {
-            reason = "client_to_screen_failed";
-            return false;
-        }
-
-        bounds = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
-        if (bounds.Width <= 0 || bounds.Height <= 0)
-        {
-            reason = "empty_bounds";
+            reason = "client_bounds_failed";
             return false;
         }
 
@@ -402,12 +500,17 @@ internal sealed class DesktopOverlayForm : Form
             return "ingame_editor_visible";
         }
 
+        if (_state.IsPracticeMode)
+        {
+            return "practice_mode";
+        }
+
         if (_state.Song == null)
         {
             return "song_missing";
         }
 
-        return ResolveSongConfig(_state) == null ? "song_config_missing" : "visible";
+        return HasEnabledWidgets(ResolveSongConfig(_state)) ? "visible" : "no_overlay_content";
     }
 
     private void LogVisibility(string reason)
@@ -456,6 +559,12 @@ internal sealed class DesktopOverlayForm : Form
         }
 
         OverlaySongConfig? songConfig = ResolveSongConfig(_state);
+        bool widgetVisible = IsWidgetOverlayVisible(_state, songConfig);
+        if (!widgetVisible)
+        {
+            return;
+        }
+
         if (songConfig == null)
         {
             return;
@@ -578,29 +687,57 @@ internal sealed class DesktopOverlayForm : Form
         };
     }
 
-    private void UpdateOverlayRegion(OverlaySongConfig songConfig, bool includeEditor)
+    private static bool IsWidgetOverlayVisible(OverlayTrackerState state, OverlaySongConfig? songConfig)
+    {
+        return state.IsInSong &&
+            !state.IsPracticeMode &&
+            !state.OverlayEditorVisible &&
+            state.Song != null &&
+            HasEnabledWidgets(songConfig);
+    }
+
+    private static bool HasEnabledWidgets(OverlaySongConfig? songConfig)
+    {
+        return songConfig != null &&
+            songConfig.OverlayWidgets.Values.Any(widget => widget != null && widget.Enabled);
+    }
+
+    private static bool IsNoteSplitWindowVisible(OverlayTrackerState state)
+    {
+        return state.IsInSong &&
+            !state.IsPracticeMode &&
+            !state.OverlayEditorVisible &&
+            state.Song != null &&
+            state.NoteSplitModeEnabled;
+    }
+
+    private void UpdateOverlayRegion(OverlaySongConfig? songConfig)
     {
         using GraphicsPath path = new();
-        bool hasWidget = false;
-        foreach (KeyValuePair<string, OverlayWidgetConfig> pair in GetOrderedWidgets(songConfig))
+        bool hasContent = false;
+
+        if (songConfig != null)
         {
-            OverlayWidgetConfig widgetConfig = pair.Value;
-            if (widgetConfig == null || !widgetConfig.Enabled)
+            foreach (KeyValuePair<string, OverlayWidgetConfig> pair in GetOrderedWidgets(songConfig))
             {
-                continue;
-            }
+                OverlayWidgetConfig widgetConfig = pair.Value;
+                if (widgetConfig == null || !widgetConfig.Enabled)
+                {
+                    continue;
+                }
 
-            RectangleF widgetRect = GetWidgetRectangle(widgetConfig);
-            if (widgetRect.Width <= 0f || widgetRect.Height <= 0f)
-            {
-                continue;
-            }
+                RectangleF widgetRect = GetWidgetRectangle(widgetConfig);
+                if (widgetRect.Width <= 0f || widgetRect.Height <= 0f)
+                {
+                    continue;
+                }
 
-            path.AddRectangle(Rectangle.Round(widgetRect));
-            hasWidget = true;
+                path.AddRectangle(Rectangle.Round(widgetRect));
+                hasContent = true;
+            }
         }
 
-        if (!hasWidget)
+        if (!hasContent)
         {
             Region = null;
             return;
@@ -768,10 +905,786 @@ internal sealed class DesktopOverlayForm : Form
     };
 }
 
+internal static class NoteSplitRenderer
+{
+    public static void DrawPanel(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
+    {
+        const float padding = 10f;
+        const float headerHeight = 58f;
+        const float footerHeight = 94f;
+        using var backgroundBrush = new SolidBrush(Color.FromArgb(238, 8, 8, 8));
+        using var borderPen = new Pen(GetBorderColor(style), 1f);
+        graphics.FillRectangle(backgroundBrush, rect);
+        graphics.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width - 1f, rect.Height - 1f);
+
+        string title = GetSongTitle(state);
+        string artist = state.Song?.Artist ?? string.Empty;
+        using (var titleFont = CreateFont(style, Clamp(rect.Width * 0.065f, 12f, 20f), FontStyle.Bold))
+        using (var subtitleFont = CreateFont(style, 12f, FontStyle.Regular))
+        using (var attemptsFont = CreateFont(style, 18f, FontStyle.Bold))
+        using (var smallLabelFont = CreateFont(style, 10f, FontStyle.Regular))
+        using (var whiteBrush = new SolidBrush(Color.White))
+        using (var mutedBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182)))
+        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter })
+        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Near })
+        {
+            RectangleF titleRect = new RectangleF(rect.X + padding, rect.Y + padding - 2f, rect.Width - 96f, 24f);
+            RectangleF artistRect = new RectangleF(rect.X + padding, rect.Y + padding + 20f, rect.Width - 96f, 18f);
+            RectangleF attemptsRect = new RectangleF(rect.Right - 72f, rect.Y + padding - 2f, 60f, 24f);
+            RectangleF attemptsLabelRect = new RectangleF(rect.Right - 72f, rect.Y + padding + 22f, 60f, 14f);
+            graphics.DrawString(title, titleFont, whiteBrush, titleRect, leftFormat);
+            if (!string.IsNullOrWhiteSpace(artist))
+            {
+                graphics.DrawString(artist, subtitleFont, mutedBrush, artistRect, leftFormat);
+            }
+
+            graphics.DrawString(state.Attempts.ToString(CultureInfo.InvariantCulture), attemptsFont, whiteBrush, attemptsRect, rightFormat);
+            graphics.DrawString("Attempts", smallLabelFont, mutedBrush, attemptsLabelRect, rightFormat);
+        }
+
+        RectangleF listRect = new RectangleF(rect.X + 1f, rect.Y + headerHeight, rect.Width - 2f, Math.Max(0f, rect.Height - headerHeight - footerHeight));
+        List<OverlayNoteSplitSectionState> rows = state.NoteSplitSections
+            .OrderBy(section => section.Order)
+            .ToList();
+        if (rows.Count == 0)
+        {
+            using var emptyFont = CreateFont(style, 14f, FontStyle.Regular);
+            using var emptyBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182));
+            using var centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            graphics.DrawString("No chart sections found.", emptyFont, emptyBrush, listRect, centered);
+        }
+        else
+        {
+            float rowHeight = Math.Min(28f, Math.Max(11f, listRect.Height / Math.Max(1, rows.Count)));
+            float nameFontSize = Clamp(rowHeight * 0.58f, 9f, 15f);
+            float valueFontSize = Clamp(rowHeight * 0.62f, 10f, 16f);
+            float splitColumnWidth = 56f;
+            float bestColumnWidth = 60f;
+            GraphicsState clipState = graphics.Save();
+            graphics.SetClip(listRect);
+            for (int i = 0; i < rows.Count; i++)
+            {
+                OverlayNoteSplitSectionState row = rows[i];
+                RectangleF rowRect = new RectangleF(listRect.X, listRect.Y + (rowHeight * i), listRect.Width, rowHeight);
+                Color rowBackground = row.IsCurrent
+                    ? Color.FromArgb(255, 42, 91, 180)
+                    : (i % 2 == 0 ? Color.FromArgb(255, 18, 18, 18) : Color.FromArgb(255, 12, 12, 12));
+                using var rowBrush = new SolidBrush(rowBackground);
+                using var rowDividerPen = new Pen(Color.FromArgb(255, 28, 28, 28), 1f);
+                graphics.FillRectangle(rowBrush, rowRect);
+                graphics.DrawLine(rowDividerPen, rowRect.X, rowRect.Bottom - 1f, rowRect.Right, rowRect.Bottom - 1f);
+
+                RectangleF nameRect = new RectangleF(rowRect.X + 10f, rowRect.Y + 1f, Math.Max(40f, rowRect.Width - splitColumnWidth - bestColumnWidth - 24f), rowRect.Height - 2f);
+                RectangleF splitRect = new RectangleF(rowRect.Right - bestColumnWidth - splitColumnWidth - 4f, rowRect.Y + 1f, splitColumnWidth, rowRect.Height - 2f);
+                RectangleF bestRect = new RectangleF(rowRect.Right - bestColumnWidth - 8f, rowRect.Y + 1f, bestColumnWidth, rowRect.Height - 2f);
+                using var nameFont = CreateFont(style, nameFontSize, row.IsCurrent ? FontStyle.Bold : FontStyle.Regular);
+                using var valueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
+                using var nameBrush = new SolidBrush(Color.White);
+                using var splitBrush = new SolidBrush(GetResultColor(row.ResultKind, row.CurrentRunMissCount));
+                using var bestBrush = new SolidBrush(GetPersonalBestColor(row));
+                using var nameFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+                using var valueFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+                graphics.DrawString(row.Name ?? string.Empty, nameFont, nameBrush, nameRect, nameFormat);
+                if (row.CurrentRunMissCount.HasValue)
+                {
+                    graphics.DrawString(FormatSectionValue(row.CurrentRunMissCount.Value), valueFont, splitBrush, splitRect, valueFormat);
+                }
+
+                string personalBestText = row.PersonalBestMissCount.HasValue
+                    ? FormatSectionValue(row.PersonalBestMissCount.Value)
+                    : "--";
+                graphics.DrawString(personalBestText, valueFont, bestBrush, bestRect, valueFormat);
+            }
+            graphics.Restore(clipState);
+        }
+
+        RectangleF totalRect = new RectangleF(rect.X + padding, rect.Bottom - footerHeight + 4f, rect.Width - (padding * 2f), 50f);
+        RectangleF previousRect = new RectangleF(rect.X + padding, rect.Bottom - 28f, rect.Width - (padding * 2f), 18f);
+        using (var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold))
+        using (var totalBrush = new SolidBrush(state.CurrentMissedNotes == 0 ? Color.FromArgb(255, 255, 214, 84) : Color.FromArgb(255, 236, 86, 86)))
+        using (var totalFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+        {
+            graphics.DrawString(state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture), totalFont, totalBrush, totalRect, totalFormat);
+        }
+
+        string previousLabel = string.IsNullOrWhiteSpace(state.PreviousSection)
+            ? "Previous Section"
+            : "Previous Section: " + state.PreviousSection;
+        string previousValue = state.PreviousSectionMissCount.HasValue
+            ? FormatSectionValue(state.PreviousSectionMissCount.Value)
+            : "--";
+        using (var previousFont = CreateFont(style, 11f, FontStyle.Regular))
+        using (var previousValueFont = CreateFont(style, 12f, FontStyle.Bold))
+        using (var labelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194)))
+        using (var valueBrush = new SolidBrush(GetResultColor(state.PreviousSectionResultKind, state.PreviousSectionMissCount)))
+        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
+        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+        {
+            RectangleF previousLabelRect = new RectangleF(previousRect.X, previousRect.Y, Math.Max(40f, previousRect.Width - 72f), previousRect.Height);
+            RectangleF previousValueRect = new RectangleF(previousRect.Right - 64f, previousRect.Y, 64f, previousRect.Height);
+            graphics.DrawString(previousLabel, previousFont, labelBrush, previousLabelRect, leftFormat);
+            graphics.DrawString(previousValue, previousValueFont, valueBrush, previousValueRect, rightFormat);
+        }
+    }
+
+    public static float Clamp(float value, float min, float max)
+    {
+        if (value < min)
+        {
+            return min;
+        }
+
+        return value > max ? max : value;
+    }
+
+    private static Color GetBorderColor(DesktopOverlayStyle style)
+    {
+        int a = (int)Clamp(style.BorderA * 255f, 0f, 255f);
+        int r = (int)Clamp(style.BorderR * 255f, 0f, 255f);
+        int g = (int)Clamp(style.BorderG * 255f, 0f, 255f);
+        int b = (int)Clamp(style.BorderB * 255f, 0f, 255f);
+        return Color.FromArgb(a, r, g, b);
+    }
+
+    private static Font CreateFont(DesktopOverlayStyle style, float baseSize, FontStyle fontStyle)
+    {
+        float fontScale = style.NoteSplitFontScale > 0f
+            ? Clamp(style.NoteSplitFontScale, 0.65f, 2.5f)
+            : 1f;
+        float size = Math.Max(8f, baseSize * fontScale);
+        string family = string.IsNullOrWhiteSpace(style.NoteSplitFontFamily)
+            ? DesktopOverlayStyle.DefaultNoteSplitFontFamily
+            : style.NoteSplitFontFamily;
+
+        try
+        {
+            return new Font(family, size, fontStyle, GraphicsUnit.Pixel);
+        }
+        catch
+        {
+            return new Font(DesktopOverlayStyle.DefaultNoteSplitFontFamily, size, fontStyle, GraphicsUnit.Pixel);
+        }
+    }
+
+    private static string GetSongTitle(OverlayTrackerState state)
+    {
+        OverlaySongDescriptor? song = state.Song;
+        string title = song?.Title ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            return title;
+        }
+
+        string songKey = song?.SongKey ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(songKey)
+            ? songKey
+            : "Unknown Song";
+    }
+
+    private static string FormatSectionValue(int missCount)
+    {
+        return missCount <= 0
+            ? "0"
+            : "-" + missCount.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static Color GetResultColor(string? resultKind, int? missCount)
+    {
+        const int alpha = 255;
+        if (!missCount.HasValue)
+        {
+            return Color.White;
+        }
+
+        if (string.Equals(resultKind, OverlayNoteSplitResultKind.PerfectImprovement, StringComparison.Ordinal))
+        {
+            return Color.FromArgb(alpha, 255, 214, 84);
+        }
+
+        if (string.Equals(resultKind, OverlayNoteSplitResultKind.Improved, StringComparison.Ordinal))
+        {
+            return Color.FromArgb(alpha, 66, 221, 111);
+        }
+
+        if (string.Equals(resultKind, OverlayNoteSplitResultKind.FirstScan, StringComparison.Ordinal))
+        {
+            return missCount.Value == 0
+                ? Color.FromArgb(alpha, 66, 221, 111)
+                : Color.FromArgb(alpha, 236, 86, 86);
+        }
+
+        if (string.Equals(resultKind, OverlayNoteSplitResultKind.Worse, StringComparison.Ordinal))
+        {
+            return Color.FromArgb(alpha, 236, 86, 86);
+        }
+
+        return Color.White;
+    }
+
+    private static Color GetPersonalBestColor(OverlayNoteSplitSectionState row)
+    {
+        return row.PersonalBestMissCount.HasValue
+            ? Color.White
+            : Color.FromArgb(255, 165, 165, 165);
+    }
+}
+
+internal sealed class NoteSplitWindowForm : Form
+{
+    private const int MinimumNoteSplitWidth = 240;
+    private const int MinimumNoteSplitHeight = 320;
+    private const int MaximumNoteSplitWidth = 1200;
+    private const int MaximumNoteSplitHeight = 1600;
+    private const int ResizeGripSize = 18;
+    private readonly Action<DesktopOverlayStyle> _saveStyle;
+    private readonly Action<string> _log;
+    private readonly Action<bool> _setDialogActive;
+    private readonly ContextMenuStrip _contextMenu;
+    private OverlayTrackerState _state = new();
+    private DesktopOverlayStyle _style = new();
+    private Rectangle _gameClientBounds = Rectangle.Empty;
+    private bool _dragging;
+    private bool _resizing;
+    private bool _settingsDialogOpen;
+    private Point _dragCursorOrigin;
+    private Point _dragWindowOrigin;
+    private Point _resizeCursorOrigin;
+    private Size _resizeWindowOrigin;
+
+    public NoteSplitWindowForm(DesktopOverlayStyle initialStyle, Action<DesktopOverlayStyle> saveStyle, Action<string> log, Action<bool> setDialogActive)
+    {
+        _style = CloneStyle(initialStyle);
+        _saveStyle = saveStyle;
+        _log = log;
+        _setDialogActive = setDialogActive;
+
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = Color.FromArgb(8, 8, 8);
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = true;
+        ShowIcon = false;
+        StartPosition = FormStartPosition.Manual;
+        TopMost = _style.NoteSplitTopMost;
+        DoubleBuffered = true;
+        Text = "Clone Hero NoteSplit";
+        MinimumSize = new Size(MinimumNoteSplitWidth, MinimumNoteSplitHeight);
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+
+        _contextMenu = BuildContextMenu();
+        ContextMenuStrip = _contextMenu;
+        Size = new Size(
+            (int)Math.Round(NoteSplitRenderer.Clamp(_style.NoteSplitWidth, MinimumNoteSplitWidth, MaximumNoteSplitWidth)),
+            (int)Math.Round(NoteSplitRenderer.Clamp(_style.NoteSplitHeight, MinimumNoteSplitHeight, MaximumNoteSplitHeight)));
+        Location = new Point(-2000, -2000);
+
+        MouseDown += HandleMouseDown;
+        MouseMove += HandleMouseMove;
+        MouseUp += HandleMouseUp;
+    }
+
+    protected override bool ShowWithoutActivation => false;
+
+    public void Synchronize(OverlayTrackerState state, DesktopOverlayStyle style, bool visible, Rectangle gameClientBounds, bool invalidate)
+    {
+        _state = state ?? new OverlayTrackerState();
+        _style = CloneStyle(style);
+        _gameClientBounds = gameClientBounds;
+        TopMost = !_settingsDialogOpen && _style.NoteSplitTopMost;
+        ApplyConfiguredBounds();
+
+        if (!visible)
+        {
+            if (Visible)
+            {
+                Hide();
+            }
+
+            return;
+        }
+
+        bool becameVisible = false;
+        if (!Visible)
+        {
+            NativeMethods.ShowWindow(Handle, NativeMethods.SW_SHOWNOACTIVATE);
+            becameVisible = true;
+        }
+
+        if (invalidate || becameVisible)
+        {
+            Invalidate();
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.None;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+        e.Graphics.CompositingQuality = CompositingQuality.HighSpeed;
+        e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+        e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        NoteSplitRenderer.DrawPanel(e.Graphics, ClientRectangle, _state, _style);
+        DrawResizeGrip(e.Graphics);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        e.Graphics.Clear(BackColor);
+    }
+
+    private ContextMenuStrip BuildContextMenu()
+    {
+        var menu = new ContextMenuStrip();
+        var settingsItem = new ToolStripMenuItem("Settings...");
+        settingsItem.Click += (_, _) => OpenSettingsDialog();
+        var resetPositionItem = new ToolStripMenuItem("Reset Position");
+        resetPositionItem.Click += (_, _) => ResetPosition();
+        var topMostItem = new ToolStripMenuItem("Always On Top") { CheckOnClick = true };
+        topMostItem.Click += (_, _) =>
+        {
+            _style.NoteSplitTopMost = topMostItem.Checked;
+            TopMost = _style.NoteSplitTopMost;
+            SaveStyleFromCurrentBounds();
+        };
+        menu.Opening += (_, _) => topMostItem.Checked = _style.NoteSplitTopMost;
+        menu.Items.Add(settingsItem);
+        menu.Items.Add(resetPositionItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(topMostItem);
+        return menu;
+    }
+
+    private void OpenSettingsDialog()
+    {
+        ActivateForInteraction();
+        using var dialog = new NoteSplitSettingsForm(_style);
+        _settingsDialogOpen = true;
+        _setDialogActive(true);
+        TopMost = false;
+        try
+        {
+            if (dialog.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            _style = CloneStyle(dialog.ResultStyle);
+            if (dialog.ResetPositionRequested)
+            {
+                _style.NoteSplitX = -1f;
+                _style.NoteSplitY = -1f;
+            }
+
+            ApplyConfiguredBounds();
+            SaveStyleFromCurrentBounds();
+            Invalidate();
+        }
+        finally
+        {
+            _settingsDialogOpen = false;
+            TopMost = _style.NoteSplitTopMost;
+            _setDialogActive(false);
+        }
+    }
+
+    private void ResetPosition()
+    {
+        _style.NoteSplitX = -1f;
+        _style.NoteSplitY = -1f;
+        ApplyConfiguredBounds();
+        SaveStyleFromCurrentBounds();
+        Invalidate();
+    }
+
+    private void HandleMouseDown(object? sender, MouseEventArgs e)
+    {
+        ActivateForInteraction();
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        if (GetResizeGripRectangle().Contains(e.Location))
+        {
+            _resizing = true;
+            _resizeCursorOrigin = Cursor.Position;
+            _resizeWindowOrigin = Size;
+            Cursor = Cursors.SizeNWSE;
+            return;
+        }
+
+        _dragging = true;
+        _dragCursorOrigin = Cursor.Position;
+        _dragWindowOrigin = Location;
+    }
+
+    private void HandleMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (_resizing)
+        {
+            Point resizeCursor = Cursor.Position;
+            Rectangle workingArea = GetWorkingArea(new Rectangle(Location, _resizeWindowOrigin));
+            int maxWidth = Math.Min(MaximumNoteSplitWidth, Math.Max(MinimumNoteSplitWidth, workingArea.Right - Left));
+            int maxHeight = Math.Min(MaximumNoteSplitHeight, Math.Max(MinimumNoteSplitHeight, workingArea.Bottom - Top));
+            int width = ClampInt(_resizeWindowOrigin.Width + (resizeCursor.X - _resizeCursorOrigin.X), MinimumNoteSplitWidth, maxWidth);
+            int height = ClampInt(_resizeWindowOrigin.Height + (resizeCursor.Y - _resizeCursorOrigin.Y), MinimumNoteSplitHeight, maxHeight);
+            Size = new Size(width, height);
+            Invalidate();
+            return;
+        }
+
+        if (!_dragging)
+        {
+            Cursor = GetResizeGripRectangle().Contains(e.Location)
+                ? Cursors.SizeNWSE
+                : Cursors.Default;
+            return;
+        }
+
+        Point cursor = Cursor.Position;
+        int offsetX = cursor.X - _dragCursorOrigin.X;
+        int offsetY = cursor.Y - _dragCursorOrigin.Y;
+        Location = new Point(_dragWindowOrigin.X + offsetX, _dragWindowOrigin.Y + offsetY);
+    }
+
+    private void HandleMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        bool changedBounds = _dragging || _resizing;
+        _dragging = false;
+        _resizing = false;
+        Cursor = GetResizeGripRectangle().Contains(PointToClient(Cursor.Position))
+            ? Cursors.SizeNWSE
+            : Cursors.Default;
+        if (!changedBounds)
+        {
+            return;
+        }
+
+        SaveStyleFromCurrentBounds();
+    }
+
+    private void ApplyConfiguredBounds()
+    {
+        if (_dragging || _resizing)
+        {
+            return;
+        }
+
+        Rectangle targetBounds = GetConfiguredBounds();
+        if (Bounds != targetBounds)
+        {
+            Bounds = targetBounds;
+        }
+    }
+
+    private Rectangle GetConfiguredBounds()
+    {
+        int width = (int)Math.Round(NoteSplitRenderer.Clamp(_style.NoteSplitWidth, MinimumNoteSplitWidth, MaximumNoteSplitWidth));
+        int height = (int)Math.Round(NoteSplitRenderer.Clamp(_style.NoteSplitHeight, MinimumNoteSplitHeight, MaximumNoteSplitHeight));
+        Point location = _style.NoteSplitX >= 0f && _style.NoteSplitY >= 0f
+            ? new Point((int)Math.Round(_style.NoteSplitX), (int)Math.Round(_style.NoteSplitY))
+            : GetDefaultLocation(width, height);
+
+        Rectangle workingArea = GetWorkingArea(new Rectangle(location, new Size(width, height)));
+        int clampedX = ClampInt(location.X, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - width));
+        int clampedY = ClampInt(location.Y, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - height));
+        return new Rectangle(clampedX, clampedY, width, height);
+    }
+
+    private Point GetDefaultLocation(int width, int height)
+    {
+        Rectangle fallback = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(80, 80, 1280, 720);
+        if (_gameClientBounds.Width <= 0 || _gameClientBounds.Height <= 0)
+        {
+            return new Point(fallback.Left + 40, fallback.Top + 40);
+        }
+
+        Rectangle workingArea = Screen.FromRectangle(_gameClientBounds).WorkingArea;
+        int preferredY = ClampInt(_gameClientBounds.Top + 16, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - height));
+        int rightX = _gameClientBounds.Right + 16;
+        if (rightX + width <= workingArea.Right)
+        {
+            return new Point(rightX, preferredY);
+        }
+
+        int leftX = _gameClientBounds.Left - width - 16;
+        if (leftX >= workingArea.Left)
+        {
+            return new Point(leftX, preferredY);
+        }
+
+        int clampedX = ClampInt(_gameClientBounds.Left + 16, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - width));
+        return new Point(clampedX, preferredY);
+    }
+
+    private Rectangle GetWorkingArea(Rectangle bounds)
+    {
+        if (bounds.Width > 0 && bounds.Height > 0)
+        {
+            return Screen.FromRectangle(bounds).WorkingArea;
+        }
+
+        if (_gameClientBounds.Width > 0 && _gameClientBounds.Height > 0)
+        {
+            return Screen.FromRectangle(_gameClientBounds).WorkingArea;
+        }
+
+        return Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+    }
+
+    private void SaveStyleFromCurrentBounds()
+    {
+        _style.NoteSplitX = Left;
+        _style.NoteSplitY = Top;
+        _style.NoteSplitWidth = Width;
+        _style.NoteSplitHeight = Height;
+        _saveStyle(CloneStyle(_style));
+        _log("NoteSplit window updated | x=" + Left + " | y=" + Top + " | w=" + Width + " | h=" + Height);
+    }
+
+    private void ActivateForInteraction()
+    {
+        try
+        {
+            NativeMethods.ShowWindow(Handle, NativeMethods.SW_SHOW);
+            NativeMethods.SetForegroundWindow(Handle);
+            Activate();
+        }
+        catch
+        {
+        }
+    }
+
+    private Rectangle GetResizeGripRectangle()
+    {
+        return new Rectangle(
+            Math.Max(0, ClientSize.Width - ResizeGripSize),
+            Math.Max(0, ClientSize.Height - ResizeGripSize),
+            ResizeGripSize,
+            ResizeGripSize);
+    }
+
+    private void DrawResizeGrip(Graphics graphics)
+    {
+        Rectangle grip = GetResizeGripRectangle();
+        using var gripPen = new Pen(Color.FromArgb(190, 186, 186, 186), 1f);
+        int right = grip.Right - 4;
+        int bottom = grip.Bottom - 4;
+        graphics.DrawLine(gripPen, right - 10, bottom, right, bottom - 10);
+        graphics.DrawLine(gripPen, right - 7, bottom, right, bottom - 7);
+        graphics.DrawLine(gripPen, right - 4, bottom, right, bottom - 4);
+    }
+
+    private static int ClampInt(int value, int min, int max)
+    {
+        if (value < min)
+        {
+            return min;
+        }
+
+        return value > max ? max : value;
+    }
+
+    private static DesktopOverlayStyle CloneStyle(DesktopOverlayStyle style)
+    {
+        return new DesktopOverlayStyle
+        {
+            BorderR = style.BorderR,
+            BorderG = style.BorderG,
+            BorderB = style.BorderB,
+            BorderA = style.BorderA,
+            NoteSplitX = style.NoteSplitX,
+            NoteSplitY = style.NoteSplitY,
+            NoteSplitWidth = style.NoteSplitWidth,
+            NoteSplitHeight = style.NoteSplitHeight,
+            NoteSplitFontFamily = style.NoteSplitFontFamily,
+            NoteSplitFontScale = style.NoteSplitFontScale,
+            NoteSplitTopMost = style.NoteSplitTopMost
+        };
+    }
+}
+
+internal sealed class NoteSplitSettingsForm : Form
+{
+    private readonly CheckBox _topMostInput;
+    private readonly Label _fontPreviewLabel;
+    private string _fontFamily;
+    private float _fontScale;
+
+    public DesktopOverlayStyle ResultStyle { get; private set; }
+    public bool ResetPositionRequested { get; private set; }
+
+    public NoteSplitSettingsForm(DesktopOverlayStyle currentStyle)
+    {
+        ResultStyle = CloneStyle(currentStyle);
+        _fontFamily = string.IsNullOrWhiteSpace(currentStyle.NoteSplitFontFamily)
+            ? DesktopOverlayStyle.DefaultNoteSplitFontFamily
+            : currentStyle.NoteSplitFontFamily;
+        _fontScale = currentStyle.NoteSplitFontScale > 0f
+            ? currentStyle.NoteSplitFontScale
+            : 1f;
+
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        Text = "NoteSplit Settings";
+        ClientSize = new Size(420, 188);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 4,
+            Padding = new Padding(12)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        _topMostInput = new CheckBox
+        {
+            Text = "Keep NoteSplit above other windows",
+            Checked = currentStyle.NoteSplitTopMost,
+            Dock = DockStyle.Fill
+        };
+        _fontPreviewLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        UpdateFontPreview();
+
+        var fontPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+        var chooseFontButton = new Button { Text = "Choose Font...", AutoSize = true };
+        chooseFontButton.Click += (_, _) => ChooseFont();
+        fontPanel.Controls.Add(_fontPreviewLabel);
+        fontPanel.Controls.Add(chooseFontButton);
+
+        var resizeHintLabel = new Label
+        {
+            Text = "Resize NoteSplit by dragging the lower-right corner of the window.",
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        layout.Controls.Add(resizeHintLabel, 0, 0);
+        layout.SetColumnSpan(resizeHintLabel, 2);
+        layout.Controls.Add(new Label { Text = "Font", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill }, 0, 1);
+        layout.Controls.Add(fontPanel, 1, 1);
+        layout.Controls.Add(new Label { Text = string.Empty, Dock = DockStyle.Fill }, 0, 2);
+        layout.Controls.Add(_topMostInput, 1, 2);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var saveButton = new Button { Text = "Save", AutoSize = true };
+        saveButton.Click += (_, _) => SaveAndClose();
+        var cancelButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
+        var resetDefaultsButton = new Button { Text = "Reset Defaults", AutoSize = true };
+        resetDefaultsButton.Click += (_, _) => ResetDefaults();
+        var resetPositionButton = new Button { Text = "Reset Position", AutoSize = true };
+        resetPositionButton.Click += (_, _) => ResetPositionRequested = true;
+        buttonPanel.Controls.Add(saveButton);
+        buttonPanel.Controls.Add(cancelButton);
+        buttonPanel.Controls.Add(resetDefaultsButton);
+        buttonPanel.Controls.Add(resetPositionButton);
+        layout.Controls.Add(buttonPanel, 0, 3);
+        layout.SetColumnSpan(buttonPanel, 2);
+
+        Controls.Add(layout);
+        AcceptButton = saveButton;
+        CancelButton = cancelButton;
+    }
+
+    private void ChooseFont()
+    {
+        using var dialog = new FontDialog
+        {
+            Font = new Font(_fontFamily, Math.Max(8f, 12f * _fontScale), FontStyle.Regular, GraphicsUnit.Point),
+            ShowColor = false,
+            ShowEffects = false
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _fontFamily = dialog.Font.FontFamily.Name;
+        _fontScale = NoteSplitRenderer.Clamp(dialog.Font.SizeInPoints / 12f, 0.65f, 2.5f);
+        UpdateFontPreview();
+    }
+
+    private void UpdateFontPreview()
+    {
+        _fontPreviewLabel.Text = _fontFamily + " (" + _fontScale.ToString("0.##", CultureInfo.InvariantCulture) + "x)";
+    }
+
+    private void ResetDefaults()
+    {
+        DesktopOverlayStyle defaults = new();
+        ResultStyle.NoteSplitWidth = defaults.NoteSplitWidth;
+        ResultStyle.NoteSplitHeight = defaults.NoteSplitHeight;
+        _fontFamily = defaults.NoteSplitFontFamily;
+        _fontScale = defaults.NoteSplitFontScale;
+        _topMostInput.Checked = defaults.NoteSplitTopMost;
+        ResetPositionRequested = true;
+        UpdateFontPreview();
+    }
+
+    private void SaveAndClose()
+    {
+        ResultStyle = CloneStyle(ResultStyle);
+        ResultStyle.NoteSplitFontFamily = _fontFamily;
+        ResultStyle.NoteSplitFontScale = _fontScale;
+        ResultStyle.NoteSplitTopMost = _topMostInput.Checked;
+        DialogResult = DialogResult.OK;
+        Close();
+    }
+
+    private static DesktopOverlayStyle CloneStyle(DesktopOverlayStyle style)
+    {
+        return new DesktopOverlayStyle
+        {
+            BorderR = style.BorderR,
+            BorderG = style.BorderG,
+            BorderB = style.BorderB,
+            BorderA = style.BorderA,
+            NoteSplitX = style.NoteSplitX,
+            NoteSplitY = style.NoteSplitY,
+            NoteSplitWidth = style.NoteSplitWidth,
+            NoteSplitHeight = style.NoteSplitHeight,
+            NoteSplitFontFamily = style.NoteSplitFontFamily,
+            NoteSplitFontScale = style.NoteSplitFontScale,
+            NoteSplitTopMost = style.NoteSplitTopMost
+        };
+    }
+}
+
 internal sealed class OverlayTrackerState
 {
     public bool IsInSong { get; set; }
     public bool OverlayEditorVisible { get; set; }
+    public bool IsPracticeMode { get; set; }
     public int Score { get; set; }
     public int Streak { get; set; }
     public int BestStreak { get; set; }
@@ -784,6 +1697,11 @@ internal sealed class OverlayTrackerState
     public int LifetimeGhostedNotes { get; set; }
     public int GlobalLifetimeGhostedNotes { get; set; }
     public bool FcAchieved { get; set; }
+    public bool NoteSplitModeEnabled { get; set; }
+    public string? PreviousSection { get; set; }
+    public int? PreviousSectionMissCount { get; set; }
+    public string? PreviousSectionResultKind { get; set; }
+    public List<OverlayNoteSplitSectionState> NoteSplitSections { get; set; } = new();
     public OverlaySongDescriptor? Song { get; set; }
     public Dictionary<string, OverlaySectionStatsState> SectionStatsByName { get; set; } = new(StringComparer.Ordinal);
 }
@@ -794,6 +1712,8 @@ internal sealed class OverlaySongDescriptor
     public string? LegacySongKey { get; set; }
     public string? OverlayLayoutKey { get; set; }
     public string? OverlayLegacyKey { get; set; }
+    public string? Title { get; set; }
+    public string? Artist { get; set; }
 }
 
 internal sealed class OverlaySectionStatsState
@@ -802,6 +1722,27 @@ internal sealed class OverlaySectionStatsState
     public int RunsPast { get; set; }
     public int Attempts { get; set; }
     public int KilledTheRun { get; set; }
+}
+
+internal sealed class OverlayNoteSplitSectionState
+{
+    public int Order { get; set; }
+    public string? Key { get; set; }
+    public string? Name { get; set; }
+    public bool IsCurrent { get; set; }
+    public int? PersonalBestMissCount { get; set; }
+    public int? CurrentRunMissCount { get; set; }
+    public string? ResultKind { get; set; }
+}
+
+internal static class OverlayNoteSplitResultKind
+{
+    public const string None = "none";
+    public const string FirstScan = "first_scan";
+    public const string Improved = "improved";
+    public const string PerfectImprovement = "perfect_improvement";
+    public const string Tie = "tie";
+    public const string Worse = "worse";
 }
 
 internal sealed class OverlayTrackerConfig
@@ -816,10 +1757,18 @@ internal sealed class OverlaySongConfig
 
 internal sealed class DesktopOverlayStyle
 {
+    public const string DefaultNoteSplitFontFamily = "Segoe UI";
     public float BorderR { get; set; } = 0.235f;
     public float BorderG { get; set; } = 0.235f;
     public float BorderB { get; set; } = 0.235f;
     public float BorderA { get; set; } = 0.70f;
+    public float NoteSplitX { get; set; } = -1f;
+    public float NoteSplitY { get; set; } = -1f;
+    public float NoteSplitWidth { get; set; } = 360f;
+    public float NoteSplitHeight { get; set; } = 720f;
+    public string NoteSplitFontFamily { get; set; } = DefaultNoteSplitFontFamily;
+    public float NoteSplitFontScale { get; set; } = 1f;
+    public bool NoteSplitTopMost { get; set; } = true;
 }
 
 internal sealed class OverlayWidgetConfig
@@ -848,12 +1797,16 @@ internal sealed class OverlayWidgetConfig
 
 internal static class NativeMethods
 {
+    public const int SW_SHOW = 5;
     public const int SW_SHOWNOACTIVATE = 4;
     public const int GWL_EXSTYLE = -20;
     public const int WS_EX_TRANSPARENT = 0x00000020;
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);

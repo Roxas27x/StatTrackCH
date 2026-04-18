@@ -1,8 +1,10 @@
 Clone Hero Section Tracker - Release Notes
 
-- OBS exports are opt-in and configurable from the in-game overlay editor.
+- NoteSplit Mode adds a LiveSplit-inspired section tracker based on per-section note misses.
+- NoteSplit runs in its own desktop window with taskbar visibility for easier OBS capture.
+- NoteSplit supports saved personal-best misses by section, previous-section summaries, and total song attempts.
+- Practice mode and bot play now hide NoteSplit entirely so no progress is tracked there.
+- Unplugging an input device during a song no longer forces the game to auto-pause.
+- OBS exports remain opt-in and configurable from the in-game overlay editor.
 - Desktop overlay support is included for borderless/windowed play.
-- Completed runs are stored in memory.json and exported to OBS only when enabled.
-- Section exports are streamlined into a single multiline Section Summary output for OBS convenience.
-- Main menu support is included so export defaults can be chosen before entering a song.
 - Install and uninstall scripts are included for patching a vanilla Clone Hero v1 folder safely.

@@ -218,6 +218,11 @@ internal static class V1StockAssemblyPatcher
             patchesApplied++;
         }
 
+        if (ApplyControllerDisconnectPausePatch(gameManager))
+        {
+            patchesApplied++;
+        }
+
         TypeDefinition? basePlayer = targetModule.Types.FirstOrDefault(type => type.Name == "BasePlayer");
         if (basePlayer == null)
         {
@@ -312,6 +317,33 @@ internal static class V1StockAssemblyPatcher
             instructions[2].OpCode == OpCodes.Stfld &&
             instructions[3].OpCode == OpCodes.Ldarg_1 &&
             instructions[4].OpCode == OpCodes.Callvirt;
+    }
+
+    private static bool ApplyControllerDisconnectPausePatch(TypeDefinition gameManager)
+    {
+        MethodDefinition? disconnectHandler = gameManager.Methods.FirstOrDefault(method =>
+            !method.IsConstructor &&
+            method.ReturnType.FullName == "System.Void" &&
+            method.Parameters.Count == 1 &&
+            string.Equals(method.Parameters[0].ParameterType.Name, "ControllerStatusChangedEventArgs", StringComparison.Ordinal));
+        if (disconnectHandler == null || !disconnectHandler.HasBody)
+        {
+            return false;
+        }
+
+        if (disconnectHandler.Body.Instructions.Count == 1 &&
+            disconnectHandler.Body.Instructions[0].OpCode == OpCodes.Ret)
+        {
+            return false;
+        }
+
+        disconnectHandler.Body.Instructions.Clear();
+        disconnectHandler.Body.Variables.Clear();
+        disconnectHandler.Body.ExceptionHandlers.Clear();
+        disconnectHandler.Body.InitLocals = false;
+        disconnectHandler.Body.GetILProcessor().Append(disconnectHandler.Body.GetILProcessor().Create(OpCodes.Ret));
+        disconnectHandler.Body.OptimizeMacros();
+        return true;
     }
 
     private static bool ApplyCustomSubtitlePatch(ModuleDefinition module)

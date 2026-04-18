@@ -12,13 +12,40 @@ $desktopOverlayExe = Join-Path $outDir "CloneHeroDesktopOverlay.exe"
 $runtimeCheckerExe = Join-Path $outDir "V1RuntimeCompatibilityChecker.exe"
 $releaseTemplateDir = Join-Path $root "release-v1-stock"
 $releaseDir = Join-Path $outDir "release"
-$gameDir = "C:\Users\Roxas\Documents\GDBOT\clone-hero-v1-writable"
-$managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
 $cecilDll = Join-Path $root ".deps\cecil\Mono.Cecil.dll"
 $cecilRocksDll = Join-Path $root ".deps\cecil\Mono.Cecil.Rocks.dll"
 $modernCsc = Join-Path $root ".deps\nuget\Microsoft.Net.Compilers.Toolset.4.10.0\tasks\net472\csc.exe"
 $legacyCsc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $csc = if (Test-Path $modernCsc) { $modernCsc } else { $legacyCsc }
+
+function Resolve-GameDir {
+    $candidateDirs = @()
+    if ($env:CLONE_HERO_BUILD_DIR) {
+        $candidateDirs += $env:CLONE_HERO_BUILD_DIR
+    }
+
+    $candidateDirs += @(
+        (Join-Path (Split-Path $root -Parent) "Clone Hero"),
+        "C:\Users\Roxas\Documents\GDBOT\clone-hero-v1-writable"
+    )
+
+    foreach ($candidateDir in $candidateDirs | Select-Object -Unique) {
+        if ([string]::IsNullOrWhiteSpace($candidateDir)) {
+            continue
+        }
+
+        $candidateManagedDir = Join-Path $candidateDir "Clone Hero_Data\Managed"
+        if ((Test-Path (Join-Path $candidateManagedDir "UnityEngine.dll")) -and
+            (Test-Path (Join-Path $candidateManagedDir "Assembly-CSharp.dll"))) {
+            return $candidateDir
+        }
+    }
+
+    throw "Unable to resolve a Clone Hero build directory. Set CLONE_HERO_BUILD_DIR or place a Clone Hero install at $(Join-Path (Split-Path $root -Parent) 'Clone Hero')."
+}
+
+$gameDir = Resolve-GameDir
+$managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
 
 if (-not (Test-Path $stockSrc)) { throw "Missing source file: $stockSrc" }
 if (-not (Test-Path $patcherSrc)) { throw "Missing source file: $patcherSrc" }
@@ -69,11 +96,11 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to build desktop overlay." }
 & $csc /nologo /target:exe /langversion:latest /optimize+ /warnaserror+ /out:$runtimeCheckerExe /reference:System.dll /reference:System.Core.dll /reference:$cecilDll $runtimeCheckerSrc
 if ($LASTEXITCODE -ne 0) { throw "Failed to build runtime compatibility checker." }
 
-& $runtimeCheckerExe $stockDll $managedDir
-if ($LASTEXITCODE -ne 0) { throw "Runtime compatibility check failed." }
-
 Copy-Item -LiteralPath $cecilDll -Destination (Join-Path $outDir "Mono.Cecil.dll") -Force
 Copy-Item -LiteralPath $cecilRocksDll -Destination (Join-Path $outDir "Mono.Cecil.Rocks.dll") -Force
+
+& $runtimeCheckerExe $stockDll $managedDir
+if ($LASTEXITCODE -ne 0) { throw "Runtime compatibility check failed." }
 
 if (Test-Path $releaseDir) {
     Remove-Item -LiteralPath $releaseDir -Recurse -Force

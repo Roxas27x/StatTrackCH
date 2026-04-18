@@ -6,7 +6,33 @@ $outDir = Join-Path $root "dist-v1-stock"
 $stockDll = Join-Path $outDir "CloneHeroV1StockTracker.dll"
 $patcherExe = Join-Path $outDir "V1StockAssemblyPatcher.exe"
 $desktopOverlayExe = Join-Path $outDir "CloneHeroDesktopOverlay.exe"
-$gameDir = "C:\Users\Roxas\Documents\GDBOT\clone-hero-v1-writable"
+
+function Resolve-GameDir {
+    $candidateDirs = @()
+    if ($env:CLONE_HERO_BUILD_DIR) {
+        $candidateDirs += $env:CLONE_HERO_BUILD_DIR
+    }
+
+    $candidateDirs += @(
+        (Join-Path (Split-Path $root -Parent) "Clone Hero"),
+        "C:\Users\Roxas\Documents\GDBOT\clone-hero-v1-writable"
+    )
+
+    foreach ($candidateDir in $candidateDirs | Select-Object -Unique) {
+        if ([string]::IsNullOrWhiteSpace($candidateDir)) {
+            continue
+        }
+
+        $candidateManagedDir = Join-Path $candidateDir "Clone Hero_Data\Managed"
+        if (Test-Path (Join-Path $candidateManagedDir "Assembly-CSharp.dll")) {
+            return $candidateDir
+        }
+    }
+
+    throw "Unable to resolve a Clone Hero install directory. Set CLONE_HERO_BUILD_DIR or place a Clone Hero install at $(Join-Path (Split-Path $root -Parent) 'Clone Hero')."
+}
+
+$gameDir = Resolve-GameDir
 $managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
 $assemblyPath = Join-Path $managedDir "Assembly-CSharp.dll"
 $targetHookDll = Join-Path $managedDir "CloneHeroV1StockTracker.dll"

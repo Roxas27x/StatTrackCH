@@ -1,5 +1,14 @@
 Clone Hero Section Tracker - Changelog
 
+2026-04-18
+- Added NoteSplit Mode for LiveSplit-style per-section miss tracking.
+- Added saved per-song, per-difficulty, and per-song-speed NoteSplit personal bests and attempts.
+- Added a separate NoteSplit desktop window with taskbar presence for OBS capture.
+- Added drag-to-move, drag-to-resize, font selection, and persistent NoteSplit window styling.
+- Fixed section miss attribution so misses are credited to the correct chart section at boundaries.
+- Hid NoteSplit automatically during bot play and practice mode.
+- Disabled the stock auto-pause behavior that triggers when a controller disconnects mid-song.
+
 2026-04-15
 - Added a player-facing release pack with install.ps1 and uninstall.ps1.
 - Added automatic backup/restore of Assembly-CSharp.dll during install and uninstall.
