@@ -6,7 +6,7 @@ It adds:
 - an in-game overlay editor for configuring exports, tracked sections, and desktop widgets
 - persistent per-song tracker memory for attempts, section progress, completed runs, ghost counts, and best FC streaks
 - optional desktop overlay widgets for pinned live stats
-- optional NoteSplit Mode, a separate LiveSplit-style window for section miss-count splits and section personal bests
+- optional NoteSplit Mode, a separate LiveSplit-style window for section miss-count splits and personal bests
 - opt-in OBS text exports for the stats and live section data you actually want on stream
 
 The tracker saves its data to `%LOCALAPPDATA%\StatTrack`, automatically migrates older `%LOCALAPPDATA%\CloneHeroSectionTracker` installs on first launch, and only writes OBS files for the exports and section outputs the player actually enables.
