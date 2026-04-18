@@ -1,6 +1,6 @@
-# Clone Hero Section Tracker
+# StatTrack
 
-Clone Hero Section Tracker turns a normal Clone Hero v1 install into an OBS-friendly stat tracking build for section practice, live overlays, and run tracking.
+StatTrack turns a normal Clone Hero v1 install into an OBS-friendly stat tracking build for section practice, live overlays, and run tracking.
 
 It adds:
 - an in-game overlay editor for configuring exports, tracked sections, and desktop widgets
@@ -15,11 +15,11 @@ The tracker saves its data to `%LOCALAPPDATA%\CloneHeroSectionTracker` and only 
 
 The release uses three main files:
 
-- `CloneHeroV1StockTracker.dll`
+- `StatTrack.dll`
   The injected gameplay tracker. It reads live Clone Hero state, tracks runs, sections, misses, overstrums, ghost notes, streaks, completed runs, and NoteSplit personal bests, then saves that state to `%LOCALAPPDATA%\CloneHeroSectionTracker` and writes the OBS exports you enable.
 - `V1StockAssemblyPatcher.exe`
   The install-time patcher for `Assembly-CSharp.dll`. It adds the hooks that load the tracker on startup, wires the tracker into the game update and miss paths it needs, and applies the controller-unplug patch so Clone Hero does not auto-pause when an input device disconnects mid-song.
-- `CloneHeroDesktopOverlay.exe`
+- `StatTrackOverlay.exe`
   The separate desktop overlay process. It reads the tracker state and config files, draws pinned desktop widgets, and runs the movable/resizable `Clone Hero NoteSplit` window when `NoteSplit Mode` is enabled.
 
 ### GUI Settings
@@ -240,20 +240,20 @@ How to install:
 1. Close Clone Hero.
 2. Make a copy of your vanilla Clone Hero folder if you want to keep one untouched backup.
 3. Extract the release zip somewhere convenient.
-4. Double-click `Install Clone Hero Section Tracker.cmd`.
+4. Double-click `Install StatTrack.cmd`.
 5. Type or paste the Clone Hero folder that contains `Clone Hero.exe`.
 6. Launch Clone Hero from that folder.
 
 What gets installed:
-- `CloneHeroV1StockTracker.dll`
-- `CloneHeroDesktopOverlay.exe`
+- `StatTrack.dll`
+- `StatTrackOverlay.exe`
 - a patched `Assembly-CSharp.dll`
 - a backup of the original `Assembly-CSharp.dll` created as `Assembly-CSharp.sectiontracker-backup.dll`
 
 The release pack also includes:
-- `Install Clone Hero Section Tracker.cmd`
-- `Uninstall Clone Hero Section Tracker.cmd`
-- `Uninstall Clone Hero Section Tracker and Wipe Data.cmd`
+- `Install StatTrack.cmd`
+- `Uninstall StatTrack.cmd`
+- `Uninstall StatTrack and Wipe Data.cmd`
 - `README.txt`
 - `version.txt`
 - `RELEASE_NOTES.txt`

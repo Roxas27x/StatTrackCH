@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Clone Hero Section Tracker Uninstall
+title StatTrack Uninstall
 cd /d "%~dp0"
 
 set "GAME_DIR="
@@ -30,8 +30,8 @@ goto fail
 :argsDone
 
 echo.
-echo Clone Hero Section Tracker Uninstall
-echo -----------------------------------
+echo StatTrack Uninstall
+echo -------------------
 echo This removes the tracker files and restores the backed up Assembly-CSharp.dll.
 echo.
 
@@ -40,8 +40,10 @@ call :resolveGameDir || goto fail
 set "MANAGED_DIR=%GAME_DIR%\Clone Hero_Data\Managed"
 set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
-set "TARGET_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
-set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
+set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
+set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
+set "LEGACY_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
+set "LEGACY_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
 
 if exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%BACKUP_ASSEMBLY_PATH%" "%ASSEMBLY_PATH%" >nul
@@ -58,6 +60,8 @@ if exist "%BACKUP_ASSEMBLY_PATH%" (
 
 if exist "%TARGET_HOOK_DLL%" del /f /q "%TARGET_HOOK_DLL%" >nul 2>&1
 if exist "%TARGET_OVERLAY_EXE%" del /f /q "%TARGET_OVERLAY_EXE%" >nul 2>&1
+if exist "%LEGACY_HOOK_DLL%" del /f /q "%LEGACY_HOOK_DLL%" >nul 2>&1
+if exist "%LEGACY_OVERLAY_EXE%" del /f /q "%LEGACY_OVERLAY_EXE%" >nul 2>&1
 
 if defined WIPE_DATA (
     set "TRACKER_DATA_DIR=%LOCALAPPDATA%\CloneHeroSectionTracker"
@@ -73,7 +77,7 @@ if defined WIPE_DATA (
 )
 
 echo.
-echo Clone Hero Section Tracker uninstall complete.
+echo StatTrack uninstall complete.
 echo Game folder: %GAME_DIR%
 echo.
 goto done

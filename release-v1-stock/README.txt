@@ -1,6 +1,6 @@
-Clone Hero Section Tracker
+StatTrack
 
-This mod turns a normal Clone Hero v1 install into an OBS-friendly tracker build.
+This mod turns a normal Clone Hero v1 install into an OBS-friendly stat tracking build.
 
 What it adds
 - an in-game editor for choosing what to track
@@ -12,7 +12,7 @@ Recommended setup
 1. Close Clone Hero.
 2. Make a copy of your vanilla Clone Hero folder so you keep one untouched backup.
 3. Extract this release somewhere convenient.
-4. Double-click "Install Clone Hero Section Tracker.cmd".
+4. Double-click "Install StatTrack.cmd".
 5. Type or paste the Clone Hero folder that contains "Clone Hero.exe".
 6. Launch Clone Hero from that folder.
 
@@ -45,8 +45,8 @@ A few quick notes
 
 Uninstall
 1. Close Clone Hero.
-2. Double-click "Uninstall Clone Hero Section Tracker.cmd".
+2. Double-click "Uninstall StatTrack.cmd".
 3. Type or paste the same Clone Hero folder you installed into.
 
 Optional full cleanup
-- Double-click "Uninstall Clone Hero Section Tracker and Wipe Data.cmd" to also delete %LOCALAPPDATA%\CloneHeroSectionTracker
+- Double-click "Uninstall StatTrack and Wipe Data.cmd" to also delete %LOCALAPPDATA%\CloneHeroSectionTracker

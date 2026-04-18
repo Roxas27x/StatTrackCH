@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Clone Hero Section Tracker Installer
+title StatTrack Installer
 cd /d "%~dp0"
 
 set "GAME_DIR="
@@ -23,14 +23,14 @@ goto fail
 
 :argsDone
 set "RELEASE_ROOT=%~dp0"
-set "STOCK_DLL=%RELEASE_ROOT%CloneHeroV1StockTracker.dll"
+set "STOCK_DLL=%RELEASE_ROOT%StatTrack.dll"
 set "PATCHER_EXE=%RELEASE_ROOT%V1StockAssemblyPatcher.exe"
-set "DESKTOP_OVERLAY_EXE=%RELEASE_ROOT%CloneHeroDesktopOverlay.exe"
+set "DESKTOP_OVERLAY_EXE=%RELEASE_ROOT%StatTrackOverlay.exe"
 set "RUNTIME_CHECKER_EXE=%RELEASE_ROOT%V1RuntimeCompatibilityChecker.exe"
 
 echo.
-echo Clone Hero Section Tracker Installer
-echo -----------------------------------
+echo StatTrack Installer
+echo -------------------
 echo Enter the Clone Hero folder that contains "Clone Hero.exe".
 echo.
 
@@ -46,8 +46,10 @@ call :resolveGameDir || goto fail
 set "MANAGED_DIR=%GAME_DIR%\Clone Hero_Data\Managed"
 set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
-set "TARGET_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
-set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
+set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
+set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
+set "LEGACY_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
+set "LEGACY_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
 
 if not exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%ASSEMBLY_PATH%" "%BACKUP_ASSEMBLY_PATH%" >nul
@@ -64,6 +66,9 @@ if errorlevel 1 (
     echo %GAME_DIR%
     goto fail
 )
+
+if /i not "%TARGET_HOOK_DLL%"=="%LEGACY_HOOK_DLL%" if exist "%LEGACY_HOOK_DLL%" del /f /q "%LEGACY_HOOK_DLL%" >nul 2>&1
+if /i not "%TARGET_OVERLAY_EXE%"=="%LEGACY_OVERLAY_EXE%" if exist "%LEGACY_OVERLAY_EXE%" del /f /q "%LEGACY_OVERLAY_EXE%" >nul 2>&1
 
 copy /y "%STOCK_DLL%" "%TARGET_HOOK_DLL%" >nul
 if errorlevel 1 (
@@ -86,7 +91,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Clone Hero Section Tracker installed successfully.
+echo StatTrack installed successfully.
 echo Game folder: %GAME_DIR%
 echo Backup created at: %BACKUP_ASSEMBLY_PATH%
 echo.

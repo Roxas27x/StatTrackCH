@@ -10,7 +10,7 @@ using System.Linq;
 
 internal static class V1StockAssemblyPatcher
 {
-    private const string HookAssemblyName = "CloneHeroV1StockTracker";
+    private const string HookAssemblyName = "StatTrack";
     private const string HookTypeName = "CloneHeroSectionTracker.V1Stock.StockTrackerHooks";
     private const string UpdateHookMethodName = "OnGameManagerUpdate";
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
@@ -110,7 +110,7 @@ internal static class V1StockAssemblyPatcher
     {
         if (args.Length != 2)
         {
-            Console.Error.WriteLine("Usage: V1StockAssemblyPatcher <Assembly-CSharp.dll> <CloneHeroV1StockTracker.dll>");
+            Console.Error.WriteLine("Usage: V1StockAssemblyPatcher <Assembly-CSharp.dll> <StatTrack.dll>");
             return 2;
         }
 

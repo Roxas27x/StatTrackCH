@@ -6,9 +6,9 @@ $stockSrc = Join-Path $root "src\V1StockTracker.cs"
 $patcherSrc = Join-Path $root "src\V1StockAssemblyPatcher.cs"
 $desktopOverlaySrc = Join-Path $root "src\DesktopOverlayApp.cs"
 $runtimeCheckerSrc = Join-Path $root "src\V1RuntimeCompatibilityChecker.cs"
-$stockDll = Join-Path $outDir "CloneHeroV1StockTracker.dll"
+$stockDll = Join-Path $outDir "StatTrack.dll"
 $patcherExe = Join-Path $outDir "V1StockAssemblyPatcher.exe"
-$desktopOverlayExe = Join-Path $outDir "CloneHeroDesktopOverlay.exe"
+$desktopOverlayExe = Join-Path $outDir "StatTrackOverlay.exe"
 $runtimeCheckerExe = Join-Path $outDir "V1RuntimeCompatibilityChecker.exe"
 $releaseTemplateDir = Join-Path $root "release-v1-stock"
 $releaseDir = Join-Path $outDir "release"
@@ -51,9 +51,9 @@ if (-not (Test-Path $stockSrc)) { throw "Missing source file: $stockSrc" }
 if (-not (Test-Path $patcherSrc)) { throw "Missing source file: $patcherSrc" }
 if (-not (Test-Path $desktopOverlaySrc)) { throw "Missing source file: $desktopOverlaySrc" }
 if (-not (Test-Path $runtimeCheckerSrc)) { throw "Missing source file: $runtimeCheckerSrc" }
-if (-not (Test-Path (Join-Path $releaseTemplateDir "Install Clone Hero Section Tracker.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Install Clone Hero Section Tracker.cmd')" }
-if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall Clone Hero Section Tracker.cmd')" }
-if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall Clone Hero Section Tracker and Wipe Data.cmd')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Install StatTrack.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Install StatTrack.cmd')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall StatTrack.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall StatTrack.cmd')" }
+if (-not (Test-Path (Join-Path $releaseTemplateDir "Uninstall StatTrack and Wipe Data.cmd"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'Uninstall StatTrack and Wipe Data.cmd')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "README.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'README.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "version.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'version.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'RELEASE_NOTES.txt')" }
@@ -106,15 +106,15 @@ if (Test-Path $releaseDir) {
     Remove-Item -LiteralPath $releaseDir -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-Copy-Item -LiteralPath $stockDll -Destination (Join-Path $releaseDir "CloneHeroV1StockTracker.dll") -Force
+Copy-Item -LiteralPath $stockDll -Destination (Join-Path $releaseDir "StatTrack.dll") -Force
 Copy-Item -LiteralPath $patcherExe -Destination (Join-Path $releaseDir "V1StockAssemblyPatcher.exe") -Force
-Copy-Item -LiteralPath $desktopOverlayExe -Destination (Join-Path $releaseDir "CloneHeroDesktopOverlay.exe") -Force
+Copy-Item -LiteralPath $desktopOverlayExe -Destination (Join-Path $releaseDir "StatTrackOverlay.exe") -Force
 Copy-Item -LiteralPath $runtimeCheckerExe -Destination (Join-Path $releaseDir "V1RuntimeCompatibilityChecker.exe") -Force
 Copy-Item -LiteralPath $cecilDll -Destination (Join-Path $releaseDir "Mono.Cecil.dll") -Force
 Copy-Item -LiteralPath $cecilRocksDll -Destination (Join-Path $releaseDir "Mono.Cecil.Rocks.dll") -Force
-Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Install Clone Hero Section Tracker.cmd") -Destination (Join-Path $releaseDir "Install Clone Hero Section Tracker.cmd") -Force
-Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker.cmd") -Destination (Join-Path $releaseDir "Uninstall Clone Hero Section Tracker.cmd") -Force
-Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd") -Destination (Join-Path $releaseDir "Uninstall Clone Hero Section Tracker and Wipe Data.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Install StatTrack.cmd") -Destination (Join-Path $releaseDir "Install StatTrack.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall StatTrack.cmd") -Destination (Join-Path $releaseDir "Uninstall StatTrack.cmd") -Force
+Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "Uninstall StatTrack and Wipe Data.cmd") -Destination (Join-Path $releaseDir "Uninstall StatTrack and Wipe Data.cmd") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "README.txt") -Destination (Join-Path $releaseDir "README.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "version.txt") -Destination (Join-Path $releaseDir "version.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt") -Destination (Join-Path $releaseDir "RELEASE_NOTES.txt") -Force

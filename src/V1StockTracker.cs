@@ -319,7 +319,7 @@ internal sealed class V1StockTracker
     private readonly object _fileWriteSync = new();
     private readonly object _exportWorkerSync = new();
     private readonly AutoResetEvent _exportSignal = new(false);
-    private const string DesktopOverlayExeName = "CloneHeroDesktopOverlay.exe";
+    private const string DesktopOverlayExeName = "StatTrackOverlay.exe";
     private const float DesktopOverlayCheckIntervalSeconds = 5f;
     private bool _memoryDirty;
     private bool _configDirty;
@@ -627,7 +627,7 @@ internal sealed class V1StockTracker
         Dictionary<string, bool> defaultEnabledTextExports = EnsureDefaultEnabledTextExports();
         Rect rect = GetEditorRect(overlayConfig);
         bool resizeHandleVisible = !overlayConfig.ResizeHandleHidden;
-        Rect updated = RenderOverlayPanel("editor", rect, "Clone Hero Tracker Overlay", resizeHandleVisible, visible =>
+        Rect updated = RenderOverlayPanel("editor", rect, "StatTrack Overlay", resizeHandleVisible, visible =>
         {
             if (overlayConfig.ResizeHandleHidden == !visible)
             {

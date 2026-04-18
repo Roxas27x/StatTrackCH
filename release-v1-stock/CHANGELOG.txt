@@ -1,4 +1,4 @@
-Clone Hero Section Tracker - Changelog
+StatTrack - Changelog
 
 2026-04-18
 - Added NoteSplit Mode for LiveSplit-style per-section miss tracking.

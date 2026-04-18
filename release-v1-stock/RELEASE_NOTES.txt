@@ -1,4 +1,4 @@
-Clone Hero Section Tracker - Release Notes
+StatTrack - Release Notes
 
 - NoteSplit Mode adds a LiveSplit-inspired section tracker based on per-section note misses.
 - NoteSplit runs in its own desktop window with taskbar visibility for easier OBS capture.

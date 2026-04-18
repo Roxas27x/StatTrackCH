@@ -1,11 +1,11 @@
 @echo off
 setlocal
-title Clone Hero Section Tracker Full Cleanup
+title StatTrack Full Cleanup
 cd /d "%~dp0"
 
 echo.
-echo Clone Hero Section Tracker Full Cleanup
-echo --------------------------------------
+echo StatTrack Full Cleanup
+echo ----------------------
 echo This removes the tracker files, restores the backed up Assembly-CSharp.dll,
 echo and deletes %%LOCALAPPDATA%%\CloneHeroSectionTracker.
 echo.
@@ -18,5 +18,5 @@ if /i not "%CONFIRM%"=="WIPE" (
     exit /b 0
 )
 
-call "%~dp0Uninstall Clone Hero Section Tracker.cmd" --wipe-data
+call "%~dp0Uninstall StatTrack.cmd" --wipe-data
 exit /b %ERRORLEVEL%
