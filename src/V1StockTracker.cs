@@ -569,11 +569,10 @@ internal sealed class V1StockTracker
             SongSpeedInfo songSpeed = ReadSongSpeed();
             DifficultyInfo difficulty = _runState.CachedDifficulty ?? DifficultyInfo.Default;
             SongDescriptor song = BuildSongDescriptor(songEntry, songSpeed, difficulty);
-            SongConfig songConfig = EnsureSongConfig(song, Array.Empty<SectionDescriptor>());
+            EnsureSongConfig(song, Array.Empty<SectionDescriptor>());
 
             _lastMenuOverlayStateFailureMessage = null;
             state.Song = song;
-            state.EnabledTextExports = CloneEnabledTextExports(songConfig);
         }
         catch (Exception ex)
         {
@@ -699,7 +698,7 @@ internal sealed class V1StockTracker
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
                 RenderOverlayEditorTransparencyControls(overlayConfig, contentRect.width - 24f);
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
-                GUILayout.Label("These defaults apply before a song is selected and seed new song configs.", GUILayout.Width(contentRect.width - 24f));
+                GUILayout.Label("These export settings are global and apply to every song.", GUILayout.Width(contentRect.width - 24f));
                 GUILayout.Label(string.Empty, GUILayout.Height(24f));
                 GUILayout.EndScrollView();
             }
@@ -727,11 +726,11 @@ internal sealed class V1StockTracker
                 GUILayout.Label("More enabled at once = stronger hitching potential.", exportWarningStyle, GUILayout.Width(contentRect.width - 24f));
                 foreach (TextExportDefinition exportDefinition in TextExportDefinition.All)
                 {
-                    bool enabled = IsTextExportEnabled(songConfig, exportDefinition.Key);
+                    bool enabled = defaultEnabledTextExports.TryGetValue(exportDefinition.Key, out bool defaultEnabled) && defaultEnabled;
                     bool updatedEnabled = GUILayout.Toggle(enabled, new GUIContent(exportDefinition.Label), GUI.skin.toggle, GUILayout.Width(contentRect.width - 24f));
                     if (updatedEnabled != enabled)
                     {
-                        songConfig.EnabledTextExports[exportDefinition.Key] = updatedEnabled;
+                        defaultEnabledTextExports[exportDefinition.Key] = updatedEnabled;
                         MarkConfigDirty();
                     }
                 }
@@ -740,11 +739,11 @@ internal sealed class V1StockTracker
                 bool disableAllExportsClicked = GUILayout.Toggle(false, new GUIContent("DISABLE ALL EXPORTS"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
                 if (disableAllExportsClicked)
                 {
-                    DisableAllTextExports(songConfig);
+                    DisableAllTextExports(defaultEnabledTextExports);
                 }
 
                 GUILayout.Label(string.Empty, GUILayout.Height(8f));
-                bool showTrackedSections = HasAnySectionTextExportEnabled(songConfig) || _overlayEditorVisible;
+                bool showTrackedSections = HasAnySectionTextExportEnabled() || _overlayEditorVisible;
                 if (showTrackedSections)
                 {
                     GUILayout.Label("Live Section Export Select", GUILayout.Width(contentRect.width - 24f));
@@ -1565,6 +1564,11 @@ internal sealed class V1StockTracker
             MarkConfigDirty();
         }
 
+        if (RemoveDeprecatedTextExports(_config.DefaultEnabledTextExports))
+        {
+            MarkConfigDirty();
+        }
+
         return _config.DefaultEnabledTextExports;
     }
 
@@ -2118,7 +2122,6 @@ internal sealed class V1StockTracker
     {
         return metricKey switch
         {
-            "score" => state.Score.ToString(CultureInfo.InvariantCulture),
             "streak" => state.Streak.ToString(CultureInfo.InvariantCulture),
             "best_streak" => state.BestStreak.ToString(CultureInfo.InvariantCulture),
             "starts" => state.Starts.ToString(CultureInfo.InvariantCulture),
@@ -2212,14 +2215,14 @@ internal sealed class V1StockTracker
         return songConfig.OverlayWidgets.TryGetValue(widgetKey, out OverlayWidgetConfig? widget) && widget.Enabled;
     }
 
-    private static bool IsTextExportEnabled(SongConfig songConfig, string exportKey)
+    private static bool IsTextExportEnabled(IReadOnlyDictionary<string, bool> enabledTextExports, string exportKey)
     {
-        return songConfig.EnabledTextExports.TryGetValue(exportKey, out bool enabled) && enabled;
+        return enabledTextExports.TryGetValue(exportKey, out bool enabled) && enabled;
     }
 
     private static bool IsTextExportEnabled(TrackerState state, string exportKey)
     {
-        return state.EnabledTextExports.TryGetValue(exportKey, out bool enabled) && enabled;
+        return IsTextExportEnabled(state.EnabledTextExports, exportKey);
     }
 
     private static bool HasAnyTextExportEnabled(TrackerState state)
@@ -2227,20 +2230,9 @@ internal sealed class V1StockTracker
         return state.EnabledTextExports.Values.Any(enabled => enabled);
     }
 
-    private static bool HasAnySectionTextExportEnabled(SongConfig songConfig)
+    private bool HasAnySectionTextExportEnabled()
     {
-        return IsTextExportEnabled(songConfig, "section_summary");
-    }
-
-    private void DisableAllTextExports(SongConfig songConfig)
-    {
-        if (songConfig.EnabledTextExports.Count == 0)
-        {
-            return;
-        }
-
-        songConfig.EnabledTextExports.Clear();
-        MarkConfigDirty();
+        return IsTextExportEnabled(EnsureDefaultEnabledTextExports(), "section_summary");
     }
 
     private void DisableAllTextExports(Dictionary<string, bool> enabledTextExports)
@@ -2496,20 +2488,21 @@ internal sealed class V1StockTracker
 
     private TrackingRequirements BuildTrackingRequirements(SongConfig songConfig)
     {
+        Dictionary<string, bool> enabledTextExports = EnsureDefaultEnabledTextExports();
         bool needSectionWidgets = songConfig.OverlayWidgets.Any(pair =>
             pair.Value != null &&
             pair.Value.Enabled &&
             pair.Key.StartsWith("section:", StringComparison.Ordinal));
-        bool needSectionExports = HasAnySectionTextExportEnabled(songConfig);
-        bool needCompletedRuns = IsTextExportEnabled(songConfig, "completed_runs");
+        bool needSectionExports = HasAnySectionTextExportEnabled();
+        bool needCompletedRuns = IsTextExportEnabled(enabledTextExports, "completed_runs");
         bool needRunTracking =
-            IsTextExportEnabled(songConfig, "best_streak") ||
-            IsTextExportEnabled(songConfig, "starts") ||
-            IsTextExportEnabled(songConfig, "restarts") ||
-            IsTextExportEnabled(songConfig, "attempts") ||
-            IsTextExportEnabled(songConfig, "lifetime_ghosted_notes") ||
-            IsTextExportEnabled(songConfig, "global_lifetime_ghosted_notes") ||
-            IsTextExportEnabled(songConfig, "fc_achieved") ||
+            IsTextExportEnabled(enabledTextExports, "best_streak") ||
+            IsTextExportEnabled(enabledTextExports, "starts") ||
+            IsTextExportEnabled(enabledTextExports, "restarts") ||
+            IsTextExportEnabled(enabledTextExports, "attempts") ||
+            IsTextExportEnabled(enabledTextExports, "lifetime_ghosted_notes") ||
+            IsTextExportEnabled(enabledTextExports, "global_lifetime_ghosted_notes") ||
+            IsTextExportEnabled(enabledTextExports, "fc_achieved") ||
             needSectionExports ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("best_streak")) ||
             IsWidgetEnabled(songConfig, BuildMetricWidgetKey("starts")) ||
@@ -2521,31 +2514,29 @@ internal sealed class V1StockTracker
             needSectionWidgets;
         bool needAnyRunTracking = needRunTracking || needCompletedRuns;
         bool needCurrentSection = needAnyRunTracking ||
-            IsTextExportEnabled(songConfig, "current_section") ||
+            IsTextExportEnabled(enabledTextExports, "current_section") ||
             needSectionExports ||
             needSectionWidgets ||
             _overlayEditorVisible;
 
         return new TrackingRequirements
         {
-            NeedScore = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "score") ||
-                IsWidgetEnabled(songConfig, BuildMetricWidgetKey("score")),
+            NeedScore = needCompletedRuns,
             NeedStreak = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "streak") ||
+                IsTextExportEnabled(enabledTextExports, "streak") ||
                 IsWidgetEnabled(songConfig, BuildMetricWidgetKey("streak")),
             NeedGhostNotes = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "current_ghosted_notes") ||
+                IsTextExportEnabled(enabledTextExports, "current_ghosted_notes") ||
                 IsWidgetEnabled(songConfig, BuildMetricWidgetKey("current_ghosted_notes")),
             NeedOverstrums = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "current_overstrums") ||
+                IsTextExportEnabled(enabledTextExports, "current_overstrums") ||
                 IsWidgetEnabled(songConfig, BuildMetricWidgetKey("current_overstrums")),
             NeedMissedNotes = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "current_missed_notes") ||
+                IsTextExportEnabled(enabledTextExports, "current_missed_notes") ||
                 IsWidgetEnabled(songConfig, BuildMetricWidgetKey("current_missed_notes")),
             NeedSongTiming = needAnyRunTracking ||
-                IsTextExportEnabled(songConfig, "song_clock") ||
-                IsTextExportEnabled(songConfig, "current_section") ||
+                IsTextExportEnabled(enabledTextExports, "song_clock") ||
+                IsTextExportEnabled(enabledTextExports, "current_section") ||
                 needSectionExports ||
                 needSectionWidgets ||
                 _overlayEditorVisible,
@@ -2560,10 +2551,10 @@ internal sealed class V1StockTracker
         };
     }
 
-    private static Dictionary<string, bool> CloneEnabledTextExports(SongConfig songConfig)
+    private static Dictionary<string, bool> CloneEnabledTextExports(IReadOnlyDictionary<string, bool> enabledTextExports)
     {
         var clone = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (KeyValuePair<string, bool> pair in songConfig.EnabledTextExports)
+        foreach (KeyValuePair<string, bool> pair in enabledTextExports)
         {
             clone[pair.Key] = pair.Value;
         }
@@ -2838,7 +2829,7 @@ internal sealed class V1StockTracker
             LifetimeGhostedNotes = songMemory.LifetimeGhostedNotes,
             GlobalLifetimeGhostedNotes = _memory.LifetimeGhostedNotes,
             FcAchieved = songMemory.FcAchieved,
-            EnabledTextExports = CloneEnabledTextExports(songConfig)
+            EnabledTextExports = CloneEnabledTextExports(EnsureDefaultEnabledTextExports())
         };
     }
 
@@ -5214,7 +5205,6 @@ internal sealed class V1StockTracker
     {
         List<SectionDescriptor> sectionList = sections.ToList();
         string configKey = song.OverlayLayoutKey ?? song.SongKey;
-        bool createdSongConfig = false;
         if (!_config.Songs.TryGetValue(configKey, out SongConfig? songConfig))
         {
             songConfig = TryMoveLegacyEntry(_config.Songs, configKey, song.OverlayLegacyKey)
@@ -5223,25 +5213,6 @@ internal sealed class V1StockTracker
                 ?? FindExistingSharedSongConfig(song, configKey)
                 ?? new SongConfig();
             _config.Songs[configKey] = songConfig;
-            createdSongConfig = true;
-            MarkConfigDirty();
-        }
-
-        if (createdSongConfig && songConfig.EnabledTextExports.Count == 0)
-        {
-            foreach (KeyValuePair<string, bool> pair in EnsureDefaultEnabledTextExports())
-            {
-                songConfig.EnabledTextExports[pair.Key] = pair.Value;
-            }
-
-            if (songConfig.EnabledTextExports.Count > 0)
-            {
-                MarkConfigDirty();
-            }
-        }
-
-        if (MigrateLegacySectionTextExports(songConfig.EnabledTextExports))
-        {
             MarkConfigDirty();
         }
 
@@ -5272,6 +5243,11 @@ internal sealed class V1StockTracker
             }
         }
 
+        if (songConfig.OverlayWidgets.Remove(BuildMetricWidgetKey("score")))
+        {
+            MarkConfigDirty();
+        }
+
         return songConfig;
     }
 
@@ -5298,6 +5274,21 @@ internal sealed class V1StockTracker
             {
                 changed = true;
             }
+        }
+
+        return changed;
+    }
+
+    private static bool RemoveDeprecatedTextExports(Dictionary<string, bool> enabledTextExports)
+    {
+        bool changed = false;
+        if (enabledTextExports.Remove("score"))
+        {
+            changed = true;
+        }
+        if (enabledTextExports.Remove("song_info"))
+        {
+            changed = true;
         }
 
         return changed;
@@ -5961,11 +5952,7 @@ internal sealed class V1StockTracker
         string currentDir = Path.Combine(_obsDir, "current");
         Directory.CreateDirectory(currentDir);
         EnsureLegacyObsCurrentCleanup(currentDir);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "song_info"), Path.Combine(currentDir, "song_title.txt"), state.Song?.Title ?? string.Empty);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "song_info"), Path.Combine(currentDir, "song_artist.txt"), state.Song?.Artist ?? string.Empty);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "song_info"), Path.Combine(currentDir, "song_charter.txt"), state.Song?.Charter ?? string.Empty);
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), FormatObsValue("Current Section", state.CurrentSection ?? string.Empty));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "score"), Path.Combine(currentDir, "score.txt"), FormatObsValue("Score", state.Score.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), FormatObsValue("Current Streak", state.Streak.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), FormatObsValue("Best Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "starts"), Path.Combine(currentDir, "starts.txt"), FormatObsValue("Starts", state.Starts.ToString(CultureInfo.InvariantCulture)));
@@ -6066,8 +6053,12 @@ internal sealed class V1StockTracker
 
         _obsLegacyCurrentCleanupCompleted = true;
         DeleteObsText(Path.Combine(currentDir, "song_key.txt"));
+        DeleteObsText(Path.Combine(currentDir, "song_title.txt"));
+        DeleteObsText(Path.Combine(currentDir, "song_artist.txt"));
+        DeleteObsText(Path.Combine(currentDir, "song_charter.txt"));
         DeleteObsText(Path.Combine(currentDir, "song_speed_percent.txt"));
         DeleteObsText(Path.Combine(currentDir, "song_speed_label.txt"));
+        DeleteObsText(Path.Combine(currentDir, "score.txt"));
         DeleteObsText(Path.Combine(currentDir, "starts_plus_restarts.txt"));
         DeleteObsText(Path.Combine(currentDir, "run_had_miss.txt"));
         DeleteObsText(Path.Combine(currentDir, "current_section_died.txt"));
@@ -6481,7 +6472,7 @@ internal sealed class V1StockTracker
     private static string BuildCompletedRunSummary(CompletedRunRecord run)
     {
         return
-            $"run {run.Index} | percent: {run.Percent} | misses: {run.MissedNotes} | first miss streak: {run.FirstMissStreak} | score: {run.Score} | best streak: {run.BestStreak} | ghosts: {run.GhostedNotes} | overstrums: {run.Overstrums} | fc: {(run.FcAchieved ? 1 : 0)}";
+            $"run {run.Index} | percent: {run.Percent} | misses: {run.MissedNotes} | first miss streak: {run.FirstMissStreak} | score: {run.Score} | best streak: {run.BestStreak} | ghosts: {run.GhostedNotes} | overstrums: {run.Overstrums} | FC: {(run.FcAchieved ? "Yes" : "No")}";
     }
 
     private static string BuildCompletedRunDirectoryName(CompletedRunRecord run)
@@ -6753,7 +6744,6 @@ public sealed class SongConfig
     public string? Title { get; set; }
     public string? Artist { get; set; }
     public string? Charter { get; set; }
-    public Dictionary<string, bool> EnabledTextExports { get; set; } = new();
     public Dictionary<string, bool> TrackedSections { get; set; } = new();
     public Dictionary<string, OverlayWidgetConfig> OverlayWidgets { get; set; } = new();
 }
@@ -6937,7 +6927,6 @@ internal sealed class OverlayMetricDefinition
 {
     public static readonly OverlayMetricDefinition[] All =
     {
-        new("score", "Score"),
         new("streak", "Current Streak"),
         new("best_streak", "Best Streak"),
         new("current_missed_notes", "Current Missed Notes"),
@@ -6965,9 +6954,7 @@ internal sealed class TextExportDefinition
 {
     public static readonly TextExportDefinition[] All =
     {
-        new("song_info", "Song Info"),
         new("current_section", "Current Section"),
-        new("score", "Score"),
         new("streak", "Current Streak"),
         new("best_streak", "Best Streak"),
         new("starts", "Starts"),
