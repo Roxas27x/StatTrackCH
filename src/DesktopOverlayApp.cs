@@ -19,50 +19,10 @@ namespace CloneHeroSectionTracker.DesktopOverlay;
 internal static class StatTrackDataPaths
 {
     internal const string CurrentDirectoryName = "StatTrack";
-    internal const string LegacyDirectoryName = "CloneHeroSectionTracker";
 
-    internal static string EnsureDataDirectoryMigrated()
+    internal static string GetCurrentDataDirectory()
     {
-        string currentDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), CurrentDirectoryName);
-        string legacyDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), LegacyDirectoryName);
-        if (!Directory.Exists(legacyDir))
-        {
-            return currentDir;
-        }
-
-        MergeDirectoryContents(legacyDir, currentDir);
-        return currentDir;
-    }
-
-    private static void MergeDirectoryContents(string sourceDir, string destinationDir)
-    {
-        Directory.CreateDirectory(destinationDir);
-
-        foreach (string filePath in Directory.GetFiles(sourceDir))
-        {
-            string destinationPath = Path.Combine(destinationDir, Path.GetFileName(filePath));
-            string? destinationParent = Path.GetDirectoryName(destinationPath);
-            if (!string.IsNullOrEmpty(destinationParent))
-            {
-                Directory.CreateDirectory(destinationParent);
-            }
-
-            if (!File.Exists(destinationPath))
-            {
-                File.Copy(filePath, destinationPath, overwrite: false);
-            }
-        }
-
-        foreach (string directoryPath in Directory.GetDirectories(sourceDir))
-        {
-            string directoryName = Path.GetFileName(directoryPath);
-            if (string.IsNullOrEmpty(directoryName))
-            {
-                continue;
-            }
-
-            MergeDirectoryContents(directoryPath, Path.Combine(destinationDir, directoryName));
-        }
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), CurrentDirectoryName);
     }
 }
 
@@ -72,7 +32,7 @@ internal static class Program
     private static void Main(string[] args)
     {
         int gameProcessId = 0;
-        string dataDir = StatTrackDataPaths.EnsureDataDirectoryMigrated();
+        string dataDir = StatTrackDataPaths.GetCurrentDataDirectory();
         for (int i = 0; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--pid", StringComparison.OrdinalIgnoreCase) &&
@@ -654,9 +614,7 @@ internal sealed class DesktopOverlayForm : Form
         string[] keys =
         {
             state.Song.OverlayLayoutKey ?? string.Empty,
-            state.Song.SongKey ?? string.Empty,
-            state.Song.OverlayLegacyKey ?? string.Empty,
-            state.Song.LegacySongKey ?? string.Empty
+            state.Song.SongKey ?? string.Empty
         };
 
         foreach (string key in keys)
@@ -1785,9 +1743,7 @@ internal sealed class OverlayTrackerState
 internal sealed class OverlaySongDescriptor
 {
     public string? SongKey { get; set; }
-    public string? LegacySongKey { get; set; }
     public string? OverlayLayoutKey { get; set; }
-    public string? OverlayLegacyKey { get; set; }
     public string? Title { get; set; }
     public string? Artist { get; set; }
 }

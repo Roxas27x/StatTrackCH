@@ -39,9 +39,6 @@ That folder contains:
 - desktop-style.json
 - obs\...
 
-Older installs automatically migrate data from:
-%LOCALAPPDATA%\CloneHeroSectionTracker
-
 A few quick notes
 - OBS exports are off by default. Turn on only the ones you actually want.
 - Completed runs are always saved in memory.json, but the OBS "runs" folder is only written when that export is enabled.

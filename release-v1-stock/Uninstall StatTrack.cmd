@@ -42,8 +42,6 @@ set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
 set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
 set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
-set "LEGACY_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
-set "LEGACY_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
 
 if exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%BACKUP_ASSEMBLY_PATH%" "%ASSEMBLY_PATH%" >nul
@@ -60,12 +58,9 @@ if exist "%BACKUP_ASSEMBLY_PATH%" (
 
 if exist "%TARGET_HOOK_DLL%" del /f /q "%TARGET_HOOK_DLL%" >nul 2>&1
 if exist "%TARGET_OVERLAY_EXE%" del /f /q "%TARGET_OVERLAY_EXE%" >nul 2>&1
-if exist "%LEGACY_HOOK_DLL%" del /f /q "%LEGACY_HOOK_DLL%" >nul 2>&1
-if exist "%LEGACY_OVERLAY_EXE%" del /f /q "%LEGACY_OVERLAY_EXE%" >nul 2>&1
 
 if defined WIPE_DATA (
     call :removeDataDir "%LOCALAPPDATA%\StatTrack" || goto fail
-    call :removeDataDir "%LOCALAPPDATA%\CloneHeroSectionTracker" || goto fail
 )
 
 echo.

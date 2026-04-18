@@ -38,8 +38,6 @@ $assemblyPath = Join-Path $managedDir "Assembly-CSharp.dll"
 $backupAssemblyPath = Join-Path $managedDir "Assembly-CSharp.sectiontracker-backup.dll"
 $targetHookDll = Join-Path $managedDir "StatTrack.dll"
 $targetOverlayExe = Join-Path $managedDir "StatTrackOverlay.exe"
-$legacyHookDll = Join-Path $managedDir "CloneHeroV1StockTracker.dll"
-$legacyOverlayExe = Join-Path $managedDir "CloneHeroDesktopOverlay.exe"
 
 if (-not (Test-Path $buildScript)) {
     throw "Missing build script: $buildScript"
@@ -53,12 +51,6 @@ if (-not (Test-Path $assemblyPath)) {
 
 if (Test-Path $backupAssemblyPath) {
     Copy-Item -LiteralPath $backupAssemblyPath -Destination $assemblyPath -Force
-}
-
-foreach ($legacyPath in @($legacyHookDll, $legacyOverlayExe)) {
-    if ($legacyPath -ne $targetHookDll -and $legacyPath -ne $targetOverlayExe -and (Test-Path $legacyPath)) {
-        Remove-Item -LiteralPath $legacyPath -Force
-    }
 }
 
 Copy-Item -LiteralPath $stockDll -Destination $targetHookDll -Force

@@ -54,8 +54,6 @@ set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
 set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
 set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
-set "LEGACY_HOOK_DLL=%MANAGED_DIR%\CloneHeroV1StockTracker.dll"
-set "LEGACY_OVERLAY_EXE=%MANAGED_DIR%\CloneHeroDesktopOverlay.exe"
 
 if not exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%ASSEMBLY_PATH%" "%BACKUP_ASSEMBLY_PATH%" >nul
@@ -79,9 +77,6 @@ if errorlevel 1 (
     echo %GAME_DIR%
     goto fail
 )
-
-if /i not "%TARGET_HOOK_DLL%"=="%LEGACY_HOOK_DLL%" if exist "%LEGACY_HOOK_DLL%" del /f /q "%LEGACY_HOOK_DLL%" >nul 2>&1
-if /i not "%TARGET_OVERLAY_EXE%"=="%LEGACY_OVERLAY_EXE%" if exist "%LEGACY_OVERLAY_EXE%" del /f /q "%LEGACY_OVERLAY_EXE%" >nul 2>&1
 
 copy /y "%STOCK_DLL%" "%TARGET_HOOK_DLL%" >nul
 if errorlevel 1 (

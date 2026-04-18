@@ -9,7 +9,7 @@ It adds:
 - optional NoteSplit Mode, a separate LiveSplit-style window for section miss-count splits and personal bests
 - opt-in OBS text exports for the stats and live section data you actually want on stream
 
-The tracker saves its data to `%LOCALAPPDATA%\StatTrack`, automatically migrates older `%LOCALAPPDATA%\CloneHeroSectionTracker` installs on first launch, and only writes OBS files for the exports and section outputs the player actually enables.
+The tracker saves its data to `%LOCALAPPDATA%\StatTrack` and only writes OBS files for the exports and section outputs the player actually enables.
 
 ## How It Works
 
@@ -268,8 +268,6 @@ The release pack also includes:
 
 The tracker writes to `%LOCALAPPDATA%\StatTrack`.
 
-Older installs automatically migrate `%LOCALAPPDATA%\CloneHeroSectionTracker` into that folder on first launch.
-
 That folder contains:
 - `state.json`
 - `memory.json`
@@ -282,4 +280,4 @@ That folder contains:
 - OBS exports are opt-in from the overlay editor.
 - Completed runs are always stored in `memory.json`, but the OBS `runs` folder is only written when that export is enabled.
 - The desktop overlay works best in borderless or windowed mode.
-- The uninstallers restore the backed up `Assembly-CSharp.dll` and remove the tracker files. The full cleanup option also deletes `%LOCALAPPDATA%\StatTrack` and any leftover legacy `%LOCALAPPDATA%\CloneHeroSectionTracker` folder.
+- The uninstallers restore the backed up `Assembly-CSharp.dll` and remove the tracker files. The full cleanup option also deletes `%LOCALAPPDATA%\StatTrack`.

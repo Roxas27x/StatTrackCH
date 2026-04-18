@@ -19,71 +19,17 @@ namespace CloneHeroSectionTracker.V1Stock
 internal static class StatTrackDataPaths
 {
     internal const string CurrentDirectoryName = "StatTrack";
-    internal const string LegacyDirectoryName = "CloneHeroSectionTracker";
 
     internal static string GetCurrentDataDirectory()
     {
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), CurrentDirectoryName);
-    }
-
-    internal static string EnsureDataDirectoryMigrated(Action<string>? log = null)
-    {
-        string currentDir = GetCurrentDataDirectory();
-        string legacyDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), LegacyDirectoryName);
-        if (!Directory.Exists(legacyDir))
-        {
-            return currentDir;
-        }
-
-        try
-        {
-            MergeDirectoryContents(legacyDir, currentDir);
-            log?.Invoke("Merged legacy data directory into " + currentDir);
-        }
-        catch (Exception ex)
-        {
-            log?.Invoke("Legacy data directory merge failed | " + ex.Message);
-        }
-
-        return currentDir;
-    }
-
-    private static void MergeDirectoryContents(string sourceDir, string destinationDir)
-    {
-        Directory.CreateDirectory(destinationDir);
-
-        foreach (string filePath in Directory.GetFiles(sourceDir))
-        {
-            string destinationPath = Path.Combine(destinationDir, Path.GetFileName(filePath));
-            string? destinationParent = Path.GetDirectoryName(destinationPath);
-            if (!string.IsNullOrEmpty(destinationParent))
-            {
-                Directory.CreateDirectory(destinationParent);
-            }
-
-            if (!File.Exists(destinationPath))
-            {
-                File.Copy(filePath, destinationPath, overwrite: false);
-            }
-        }
-
-        foreach (string directoryPath in Directory.GetDirectories(sourceDir))
-        {
-            string directoryName = Path.GetFileName(directoryPath);
-            if (string.IsNullOrEmpty(directoryName))
-            {
-                continue;
-            }
-
-            MergeDirectoryContents(directoryPath, Path.Combine(destinationDir, directoryName));
-        }
     }
 }
 
 internal static class StockTrackerLog
 {
     private static readonly object Sync = new();
-    private static readonly string LogDir = StatTrackDataPaths.EnsureDataDirectoryMigrated();
+    private static readonly string LogDir = StatTrackDataPaths.GetCurrentDataDirectory();
     private static readonly string LogPath = Path.Combine(LogDir, "v1-stock.log");
     private static readonly bool DebugLoggingEnabled = false;
 
@@ -379,7 +325,6 @@ internal sealed class V1StockTracker
     private readonly Dictionary<string, List<SectionDescriptor>> _songSectionsCache = new();
     private readonly Dictionary<string, List<string>> _songSectionNamesCache = new();
     private readonly Dictionary<string, string> _fileWriteCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _obsLegacySongCleanupKeys = new(StringComparer.Ordinal);
     private readonly object _fileWriteSync = new();
     private readonly object _exportWorkerSync = new();
     private readonly AutoResetEvent _exportSignal = new(false);
@@ -481,7 +426,6 @@ internal sealed class V1StockTracker
     private Process? _desktopOverlayProcess;
     private float _lastDesktopOverlayCheckAt = -999f;
     private bool _desktopOverlayLaunchFailed;
-    private bool _obsLegacyCurrentCleanupCompleted;
     private string? _lastMenuOverlayStateFailureMessage;
     private const float OverlayWidgetDefaultWidth = 300f;
     private const float OverlayWidgetDefaultHeight = 90f;
@@ -609,7 +553,7 @@ internal sealed class V1StockTracker
 
     private TrackerState BuildMenuOverlayState()
     {
-        Dictionary<string, bool> defaultExports = new(EnsureDefaultEnabledTextExports(), StringComparer.Ordinal);
+        Dictionary<string, bool> defaultExports = GetEnabledTextExportsSnapshot();
         TrackerState state = CreateIdleState();
         state.OverlayEditorVisible = _overlayEditorVisible;
         state.EnabledTextExports = defaultExports;
@@ -1599,17 +1543,19 @@ internal sealed class V1StockTracker
     private Dictionary<string, bool> EnsureDefaultEnabledTextExports()
     {
         _config.DefaultEnabledTextExports ??= new Dictionary<string, bool>(StringComparer.Ordinal);
-        if (MigrateLegacySectionTextExports(_config.DefaultEnabledTextExports))
-        {
-            MarkConfigDirty();
-        }
-
-        if (RemoveDeprecatedTextExports(_config.DefaultEnabledTextExports))
-        {
-            MarkConfigDirty();
-        }
-
         return _config.DefaultEnabledTextExports;
+    }
+
+    private Dictionary<string, bool> GetEnabledTextExportsSnapshot()
+    {
+        Dictionary<string, bool> rawExports = EnsureDefaultEnabledTextExports();
+        Dictionary<string, bool> snapshot = new(StringComparer.Ordinal);
+        foreach (TextExportDefinition exportDefinition in TextExportDefinition.All)
+        {
+            snapshot[exportDefinition.Key] = rawExports.TryGetValue(exportDefinition.Key, out bool enabled) && enabled;
+        }
+
+        return snapshot;
     }
 
     private static Rect GetEditorRect(OverlayEditorConfig config)
@@ -2164,8 +2110,6 @@ internal sealed class V1StockTracker
         {
             "streak" => state.Streak.ToString(CultureInfo.InvariantCulture),
             "best_streak" => state.BestStreak.ToString(CultureInfo.InvariantCulture),
-            "starts" => state.Starts.ToString(CultureInfo.InvariantCulture),
-            "restarts" => state.Restarts.ToString(CultureInfo.InvariantCulture),
             "attempts" => state.Attempts.ToString(CultureInfo.InvariantCulture),
             "current_missed_notes" => state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture),
             "current_overstrums" => state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture),
@@ -2267,9 +2211,9 @@ internal sealed class V1StockTracker
 
     private static bool HasAnyTextExportEnabled(TrackerState state)
     {
-        return state.EnabledTextExports.Any(pair =>
-            !string.Equals(pair.Key, NoteSplitModeExportKey, StringComparison.Ordinal) &&
-            pair.Value) ||
+        return TextExportDefinition.All.Any(exportDefinition =>
+            !string.Equals(exportDefinition.Key, NoteSplitModeExportKey, StringComparison.Ordinal) &&
+            IsTextExportEnabled(state, exportDefinition.Key)) ||
             state.SectionStats.Any(section => section.Tracked);
     }
 
@@ -2360,7 +2304,7 @@ internal sealed class V1StockTracker
 
     private bool ShouldUseDesktopOverlay(TrackerState state)
     {
-        if (IsTextExportEnabled(EnsureDefaultEnabledTextExports(), NoteSplitModeExportKey))
+        if (IsTextExportEnabled(GetEnabledTextExportsSnapshot(), NoteSplitModeExportKey))
         {
             return true;
         }
@@ -2460,7 +2404,7 @@ internal sealed class V1StockTracker
             return;
         }
 
-        _dataDir = StatTrackDataPaths.EnsureDataDirectoryMigrated(message => StockTrackerLog.WriteDebug(message));
+        _dataDir = StatTrackDataPaths.GetCurrentDataDirectory();
         _statePath = Path.Combine(_dataDir, "state.json");
         _memoryPath = Path.Combine(_dataDir, "memory.json");
         _configPath = Path.Combine(_dataDir, "config.json");
@@ -2560,7 +2504,7 @@ internal sealed class V1StockTracker
 
     private TrackingRequirements BuildTrackingRequirements(SongConfig songConfig)
     {
-        Dictionary<string, bool> enabledTextExports = EnsureDefaultEnabledTextExports();
+        Dictionary<string, bool> enabledTextExports = GetEnabledTextExportsSnapshot();
         bool needSectionWidgets = songConfig.OverlayWidgets.Any(pair =>
             pair.Value != null &&
             pair.Value.Enabled &&
@@ -2617,17 +2561,6 @@ internal sealed class V1StockTracker
             NeedResultStats = needCompletedRuns,
             NeedCompletedRuns = needCompletedRuns
         };
-    }
-
-    private static Dictionary<string, bool> CloneEnabledTextExports(IReadOnlyDictionary<string, bool> enabledTextExports)
-    {
-        var clone = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (KeyValuePair<string, bool> pair in enabledTextExports)
-        {
-            clone[pair.Key] = pair.Value;
-        }
-
-        return clone;
     }
 
     private void UpdateMinimalRunState(string songKey, string currentSectionName, double songTime, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes)
@@ -2866,7 +2799,7 @@ internal sealed class V1StockTracker
         List<TrackedSectionState> trackedSections = sectionSnapshot.TrackedSections;
         List<SectionStatsState> sectionStats = sectionSnapshot.SectionStats;
         Dictionary<string, SectionStatsState> sectionStatsByName = sectionSnapshot.SectionStatsByName;
-        Dictionary<string, bool> enabledTextExports = CloneEnabledTextExports(EnsureDefaultEnabledTextExports());
+        Dictionary<string, bool> enabledTextExports = GetEnabledTextExportsSnapshot();
         bool noteSplitEnabled = IsTextExportEnabled(enabledTextExports, NoteSplitModeExportKey);
         SectionStatsState? currentSectionStats = string.IsNullOrWhiteSpace(currentSectionName)
             ? null
@@ -5162,9 +5095,7 @@ internal sealed class V1StockTracker
             DifficultyCode = difficulty.Code,
             DifficultyName = difficulty.Name,
             SongKey = BuildSongKey(songEntry, songSpeed.Percent, difficulty),
-            LegacySongKey = BuildLegacySongKey(songEntry, songSpeed.Percent, difficulty),
-            OverlayLayoutKey = BuildOverlayLayoutKey(songEntry),
-            OverlayLegacyKey = BuildOverlayLegacyKey(songEntry)
+            OverlayLayoutKey = BuildOverlayLayoutKey(songEntry)
         };
     }
 
@@ -5190,26 +5121,6 @@ internal sealed class V1StockTracker
         return readable + " " + speedSuffix;
     }
 
-    private static string BuildLegacySongKey(object songEntry, int songSpeedPercent, DifficultyInfo difficulty)
-    {
-        string speedSuffix = $"@{songSpeedPercent}%";
-        string checksum = GetStringProperty(songEntry, "checksumString") ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(checksum))
-        {
-            return difficulty.Code + ":" + checksum.Trim() + speedSuffix;
-        }
-
-        string folderPath = GetStringField(songEntry, "folderPath") ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(folderPath))
-        {
-            return difficulty.Code + ":" + folderPath.Trim() + speedSuffix;
-        }
-
-        string title = GetStringProperty(songEntry, "Name_StrippedTags") ?? "unknown-title";
-        string artist = GetStringProperty(songEntry, "Artist_StrippedTags") ?? "unknown-artist";
-        return $"{difficulty.Code}:{artist}::{title}{speedSuffix}";
-    }
-
     private static string BuildOverlayLayoutKey(object songEntry)
     {
         string artist = NormalizeSongKeyPart(GetStringProperty(songEntry, "Artist_StrippedTags") ?? GetStringProperty(songEntry, "Artist"));
@@ -5229,23 +5140,6 @@ internal sealed class V1StockTracker
         }
 
         return readable;
-    }
-
-    private static string? BuildOverlayLegacyKey(object songEntry)
-    {
-        string checksum = GetStringProperty(songEntry, "checksumString") ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(checksum))
-        {
-            return checksum.Trim();
-        }
-
-        string folderPath = GetStringField(songEntry, "folderPath") ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(folderPath))
-        {
-            return folderPath.Trim();
-        }
-
-        return null;
     }
 
     private static string NormalizeSongKeyPart(string? value)
@@ -5355,7 +5249,7 @@ internal sealed class V1StockTracker
         List<SectionDescriptor> sectionList = sections.ToList();
         if (!_memory.Songs.TryGetValue(song.SongKey, out SongMemory? songMemory))
         {
-            songMemory = TryMoveLegacyEntry(_memory.Songs, song.SongKey, song.LegacySongKey) ?? new SongMemory();
+            songMemory = new SongMemory();
             _memory.Songs[song.SongKey] = songMemory;
             MarkMemoryDirty();
         }
@@ -5379,27 +5273,16 @@ internal sealed class V1StockTracker
         foreach (SectionDescriptor section in sectionList)
         {
             string sectionKey = BuildSectionOverlayKey(sectionList, section);
-            EnsureSectionMemory(songMemory, sectionKey, section.Name);
+            EnsureSectionMemory(songMemory, sectionKey);
         }
 
         return songMemory;
     }
 
-    private SectionMemory EnsureSectionMemory(SongMemory songMemory, string sectionKey, string? legacySectionKey = null)
+    private SectionMemory EnsureSectionMemory(SongMemory songMemory, string sectionKey)
     {
         if (songMemory.Sections.TryGetValue(sectionKey, out SectionMemory? sectionMemory))
         {
-            return sectionMemory;
-        }
-
-        string normalizedLegacySectionKey = legacySectionKey ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(normalizedLegacySectionKey) &&
-            !string.Equals(sectionKey, normalizedLegacySectionKey, StringComparison.Ordinal) &&
-            songMemory.Sections.TryGetValue(normalizedLegacySectionKey, out sectionMemory))
-        {
-            songMemory.Sections.Remove(normalizedLegacySectionKey);
-            songMemory.Sections[sectionKey] = sectionMemory;
-            MarkMemoryDirty();
             return sectionMemory;
         }
 
@@ -5415,11 +5298,7 @@ internal sealed class V1StockTracker
         string configKey = song.OverlayLayoutKey ?? song.SongKey;
         if (!_config.Songs.TryGetValue(configKey, out SongConfig? songConfig))
         {
-            songConfig = TryMoveLegacyEntry(_config.Songs, configKey, song.OverlayLegacyKey)
-                ?? TryMoveLegacyEntry(_config.Songs, configKey, song.SongKey)
-                ?? TryMoveLegacyEntry(_config.Songs, configKey, song.LegacySongKey)
-                ?? FindExistingSharedSongConfig(song, configKey)
-                ?? new SongConfig();
+            songConfig = new SongConfig();
             _config.Songs[configKey] = songConfig;
             MarkConfigDirty();
         }
@@ -5445,96 +5324,12 @@ internal sealed class V1StockTracker
             string sectionKey = BuildSectionOverlayKey(sectionList, section);
             if (!songConfig.TrackedSections.ContainsKey(sectionKey))
             {
-                bool migratedTracked = songConfig.TrackedSections.TryGetValue(section.Name, out bool legacyTracked) && legacyTracked;
-                songConfig.TrackedSections[sectionKey] = migratedTracked;
-                MarkConfigDirty();
-            }
-        }
-
-        foreach (string deprecatedMetricKey in new[] { "score", "starts", "restarts" })
-        {
-            if (songConfig.OverlayWidgets.Remove(BuildMetricWidgetKey(deprecatedMetricKey)))
-            {
+                songConfig.TrackedSections[sectionKey] = false;
                 MarkConfigDirty();
             }
         }
 
         return songConfig;
-    }
-
-    private bool MigrateLegacySectionTextExports(Dictionary<string, bool> enabledTextExports)
-    {
-        bool changed = false;
-        foreach (string legacyKey in new[] { "section_attempts", "section_fcs_past", "section_killed_the_run" })
-        {
-            if (enabledTextExports.Remove(legacyKey))
-            {
-                changed = true;
-            }
-        }
-
-        return changed;
-    }
-
-    private static bool RemoveDeprecatedTextExports(Dictionary<string, bool> enabledTextExports)
-    {
-        bool changed = false;
-        if (enabledTextExports.Remove("score"))
-        {
-            changed = true;
-        }
-        if (enabledTextExports.Remove("song_info"))
-        {
-            changed = true;
-        }
-        foreach (string removedKey in new[] { "starts", "restarts", "song_clock", "section_summary" })
-        {
-            if (enabledTextExports.Remove(removedKey))
-            {
-                changed = true;
-            }
-        }
-
-        return changed;
-    }
-
-    private SongConfig? FindExistingSharedSongConfig(SongDescriptor song, string newKey)
-    {
-        string layoutKey = song.OverlayLayoutKey ?? string.Empty;
-        foreach (KeyValuePair<string, SongConfig> pair in _config.Songs.ToList())
-        {
-            if (string.Equals(pair.Key, newKey, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (!string.Equals(NormalizeExistingOverlayConfigKey(pair.Key), layoutKey, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            _config.Songs.Remove(pair.Key);
-            return pair.Value;
-        }
-
-        return null;
-    }
-
-    private static string NormalizeExistingOverlayConfigKey(string key)
-    {
-        string normalized = key.Trim();
-        int speedSeparator = normalized.LastIndexOf(" @", StringComparison.Ordinal);
-        if (speedSeparator >= 0)
-        {
-            normalized = normalized.Substring(0, speedSeparator).TrimEnd();
-        }
-
-        if (normalized.Length > 2 && normalized[1] == ' ')
-        {
-            normalized = normalized.Substring(2);
-        }
-
-        return normalized;
     }
 
     private void ResetSongOverlay(SongConfig songConfig)
@@ -5616,8 +5411,6 @@ internal sealed class V1StockTracker
         _runState = new RunState();
         _latestState = CreateIdleState();
         _sectionSnapshotCache = null;
-        _obsLegacyCurrentCleanupCompleted = false;
-        _obsLegacySongCleanupKeys.Clear();
         _songSectionsCache.Clear();
         _songSectionNamesCache.Clear();
         _completedRunsSnapshotSongKey = string.Empty;
@@ -5677,24 +5470,6 @@ internal sealed class V1StockTracker
         }
     }
 
-    private static TValue? TryMoveLegacyEntry<TValue>(Dictionary<string, TValue> dictionary, string newKey, string? legacyKey) where TValue : class
-    {
-        if (string.IsNullOrWhiteSpace(legacyKey) || string.Equals(newKey, legacyKey, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        string lookupKey = legacyKey!.Trim();
-        if (!dictionary.TryGetValue(lookupKey, out TValue? value))
-        {
-            return null;
-        }
-
-        dictionary.Remove(lookupKey);
-        dictionary[newKey] = value;
-        return value;
-    }
-
     private void UpdateRunTracking(SongDescriptor song, SongMemory songMemory, SongConfig songConfig, string currentSectionName, double songTime, double songDuration, int score, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes, int currentNotesHit, PlayerStatsSnapshot? resultStats, bool isPractice, bool trackSongProgress, bool trackCompletedRuns)
     {
         bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
@@ -5706,7 +5481,7 @@ internal sealed class V1StockTracker
             songTime <= 1.0;
         bool started = (newSong || !_runState.InRun || startedFromSongSelect) && !restarted;
         bool newRun = started || restarted;
-        bool noteSplitEnabled = IsTextExportEnabled(EnsureDefaultEnabledTextExports(), NoteSplitModeExportKey);
+        bool noteSplitEnabled = IsTextExportEnabled(GetEnabledTextExportsSnapshot(), NoteSplitModeExportKey);
         if (newRun)
         {
             _runState = new RunState
@@ -6318,12 +6093,9 @@ internal sealed class V1StockTracker
 
         string currentDir = Path.Combine(_obsDir, "current");
         Directory.CreateDirectory(currentDir);
-        EnsureLegacyObsCurrentCleanup(currentDir);
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), FormatObsValue("Current Section", state.CurrentSection ?? string.Empty));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), FormatObsValue("Current Streak", state.Streak.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), FormatObsValue("Best FC Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "starts"), Path.Combine(currentDir, "starts.txt"), FormatObsValue("Starts", state.Starts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "restarts"), Path.Combine(currentDir, "restarts.txt"), FormatObsValue("Restarts", state.Restarts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), FormatObsValue("Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(currentDir, "current_ghosted_notes.txt"), FormatObsValue("Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(currentDir, "current_overstrums.txt"), FormatObsValue("Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
@@ -6331,8 +6103,6 @@ internal sealed class V1StockTracker
         WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(currentDir, "lifetime_ghosted_notes.txt"), FormatObsValue("Song Lifetime Ghosted Notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "global_lifetime_ghosted_notes"), Path.Combine(currentDir, "global_lifetime_ghosted_notes.txt"), FormatObsValue("Global Lifetime Ghosted Notes", state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "fc_achieved"), Path.Combine(currentDir, "fc_achieved.txt"), FormatObsValue("FC Achieved", state.FcAchieved ? "True" : "False"));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "song_clock"), Path.Combine(currentDir, "song_time.txt"), FormatObsValue("Song Time", state.SongTime.ToString("0.###", CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "song_clock"), Path.Combine(currentDir, "song_duration.txt"), FormatObsValue("Song Duration", state.SongDuration.ToString("0.###", CultureInfo.InvariantCulture)));
 
         bool exportTrackedSectionFiles = state.SectionStats.Any(candidate => candidate.Tracked);
         if (state.CurrentSectionStats != null && exportTrackedSectionFiles)
@@ -6351,9 +6121,6 @@ internal sealed class V1StockTracker
 
         string songDir = Path.Combine(_obsDir, "songs", SanitizeFileName(state.Song.SongKey));
         Directory.CreateDirectory(songDir);
-        EnsureLegacyObsSongCleanup(state.Song.SongKey, songDir);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "starts"), Path.Combine(songDir, "starts.txt"), FormatObsValue("Starts", state.Starts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "restarts"), Path.Combine(songDir, "restarts.txt"), FormatObsValue("Restarts", state.Restarts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(songDir, "attempts.txt"), FormatObsValue("Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(songDir, "current_ghosted_notes.txt"), FormatObsValue("Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
         WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(songDir, "current_overstrums.txt"), FormatObsValue("Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
@@ -6409,74 +6176,6 @@ internal sealed class V1StockTracker
         else
         {
             DeleteObsDirectory(runsDir);
-        }
-    }
-
-    private void EnsureLegacyObsCurrentCleanup(string currentDir)
-    {
-        if (_obsLegacyCurrentCleanupCompleted)
-        {
-            return;
-        }
-
-        _obsLegacyCurrentCleanupCompleted = true;
-        DeleteObsText(Path.Combine(currentDir, "song_key.txt"));
-        DeleteObsText(Path.Combine(currentDir, "song_title.txt"));
-        DeleteObsText(Path.Combine(currentDir, "song_artist.txt"));
-        DeleteObsText(Path.Combine(currentDir, "song_charter.txt"));
-        DeleteObsText(Path.Combine(currentDir, "song_speed_percent.txt"));
-        DeleteObsText(Path.Combine(currentDir, "song_speed_label.txt"));
-        DeleteObsText(Path.Combine(currentDir, "score.txt"));
-        DeleteObsText(Path.Combine(currentDir, "starts_plus_restarts.txt"));
-        DeleteObsText(Path.Combine(currentDir, "run_had_miss.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_died.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_clears.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_runs_past.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_attempts.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_fcs_past.txt"));
-        DeleteObsText(Path.Combine(currentDir, "current_section_killed_the_run.txt"));
-    }
-
-    private void EnsureLegacyObsSongCleanup(string songKey, string songDir)
-    {
-        if (!_obsLegacySongCleanupKeys.Add(songKey))
-        {
-            return;
-        }
-
-        DeleteObsText(Path.Combine(songDir, "title.txt"));
-        DeleteObsText(Path.Combine(songDir, "artist.txt"));
-        DeleteObsText(Path.Combine(songDir, "charter.txt"));
-        DeleteObsText(Path.Combine(songDir, "song_speed_percent.txt"));
-        DeleteObsText(Path.Combine(songDir, "song_speed_label.txt"));
-        DeleteObsText(Path.Combine(songDir, "starts_plus_restarts.txt"));
-        DeleteObsText(Path.Combine(songDir, "run_had_miss.txt"));
-
-        string sectionsDir = Path.Combine(songDir, "sections");
-        if (Directory.Exists(sectionsDir))
-        {
-            foreach (string sectionDir in Directory.GetDirectories(sectionsDir))
-            {
-                DeleteObsText(Path.Combine(sectionDir, "died.txt"));
-                DeleteObsText(Path.Combine(sectionDir, "clears.txt"));
-                DeleteObsText(Path.Combine(sectionDir, "runs_past.txt"));
-                DeleteObsText(Path.Combine(sectionDir, "attempts.txt"));
-                DeleteObsText(Path.Combine(sectionDir, "fcs_past.txt"));
-                DeleteObsText(Path.Combine(sectionDir, "killed_the_run.txt"));
-            }
-        }
-
-        string runsDir = Path.Combine(songDir, "runs");
-        if (Directory.Exists(runsDir))
-        {
-            foreach (string runDir in Directory.GetDirectories(runsDir))
-            {
-                DeleteObsText(Path.Combine(runDir, "run_had_miss.txt"));
-                DeleteObsText(Path.Combine(runDir, "song_speed_percent.txt"));
-                DeleteObsText(Path.Combine(runDir, "song_speed_label.txt"));
-                DeleteObsText(Path.Combine(runDir, "difficulty_code.txt"));
-                DeleteObsText(Path.Combine(runDir, "difficulty_name.txt"));
-            }
         }
     }
 
@@ -7091,9 +6790,7 @@ public sealed class TrackerState
 public sealed class SongDescriptor
 {
     public string SongKey { get; set; } = string.Empty;
-    public string? LegacySongKey { get; set; }
     public string? OverlayLayoutKey { get; set; }
-    public string? OverlayLegacyKey { get; set; }
     [JsonIgnore]
     public int SongSpeedPercent { get; set; } = 100;
     [JsonIgnore]
@@ -7319,36 +7016,6 @@ public sealed class SectionMemory
     public int Attempts { get; set; }
     public int KilledTheRun { get; set; }
     public int? BestMissCount { get; set; }
-    public int? BestMissOverstrums { get; set; }
-
-    [JsonProperty("Deaths")]
-    private int LegacyDeaths
-    {
-        set
-        {
-            if (Attempts == 0)
-            {
-                Attempts = value;
-            }
-
-            if (KilledTheRun == 0)
-            {
-                KilledTheRun = value;
-            }
-        }
-    }
-
-    [JsonProperty("Clears")]
-    private int LegacyClears
-    {
-        set
-        {
-            if (RunsPast == 0)
-            {
-                RunsPast = value;
-            }
-        }
-    }
 }
 
 internal sealed class RunState
