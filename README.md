@@ -222,37 +222,13 @@ Deletes all saved tracker data and settings, including `state.json`, `memory.jso
 <details>
 <summary><code>Right-Click NoteSplit</code></summary>
 
-Opens the NoteSplit context menu, which gives quick access to `Settings...`, `Reset Position`, and `Keep NoteSplit above other windows`.
-</details>
-
-<details>
-<summary><code>Settings...</code></summary>
-
-Opens the NoteSplit settings dialog. While this dialog is open, the window temporarily gives priority to the settings dialog so it is easier to edit without focus fights.
+Opens the NoteSplit context menu, which gives quick access to `Choose Font...`, and `Always on Top` Settings. Tracking gets paused when this menu is open.
 </details>
 
 <details>
 <summary><code>Choose Font...</code></summary>
 
 Lets you change the NoteSplit font family and effective font scale.
-</details>
-
-<details>
-<summary><code>Keep NoteSplit above other windows</code></summary>
-
-Controls whether the NoteSplit window stays topmost after the settings dialog is closed.
-</details>
-
-<details>
-<summary><code>Reset Position</code></summary>
-
-Moves NoteSplit back to its default placement near the game window and clears the saved custom position.
-</details>
-
-<details>
-<summary><code>Resize NoteSplit by dragging the lower-right corner of the window.</code></summary>
-
-NoteSplit can be resized directly with the mouse instead of typing width and height values. The new size is saved automatically.
 </details>
 
 ## User Release Pack
