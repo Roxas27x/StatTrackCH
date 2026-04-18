@@ -1,14 +1,15 @@
 # Clone Hero Section Tracker
 
-Clone Hero Section Tracker turns a normal Clone Hero v1 install into an OBS-friendly tracking build.
+Clone Hero Section Tracker turns a normal Clone Hero v1 install into a section-practice, streaming, and run-tracking build.
 
 It adds:
-- an in-game overlay editor for choosing what to track
+- an in-game overlay editor for configuring exports, tracked sections, and desktop widgets
+- persistent per-song tracker memory for attempts, section progress, completed runs, ghost counts, and best FC streaks
 - optional desktop overlay widgets for pinned live stats
-- opt-in OBS text exports
-- saved tracker memory for completed runs, section progress, ghost counts, and layout settings
+- optional NoteSplit Mode, a separate LiveSplit-style window for section miss-count splits and section personal bests
+- opt-in OBS text exports for the stats and live section data you actually want on stream
 
-The tracker only writes OBS files for the exports the player actually enables.
+The tracker saves its data to `%LOCALAPPDATA%\CloneHeroSectionTracker` and only writes OBS files for the exports and section outputs the player actually enables.
 
 ## How It Works
 
