@@ -241,8 +241,9 @@ How to install:
 2. Make a copy of your vanilla Clone Hero folder if you want to keep one untouched backup.
 3. Extract the release zip somewhere convenient.
 4. Double-click `Install StatTrack.cmd`.
-5. Type or paste the Clone Hero folder that contains `Clone Hero.exe`.
-6. Launch Clone Hero from that folder.
+5. Choose `Y` to install into `C:\Program Files\Clone Hero`, or choose `N` to browse to a different Clone Hero folder.
+6. If you install into `Program Files`, approve the administrator prompt when Windows asks.
+7. Launch Clone Hero from that folder.
 
 What gets installed:
 - `StatTrack.dll`
