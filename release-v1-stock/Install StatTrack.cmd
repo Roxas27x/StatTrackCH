@@ -23,7 +23,11 @@ echo Unknown argument: %~1
 goto fail
 
 :argsDone
-set "RELEASE_ROOT=%~dp0"
+ if defined ELEVATE_RELEASE_ROOT (
+     set "RELEASE_ROOT=%ELEVATE_RELEASE_ROOT%"
+ ) else (
+     set "RELEASE_ROOT=%~dp0"
+ )
 set "DEFAULT_GAME_DIR=C:\Program Files\Clone Hero"
 set "STOCK_DLL=%RELEASE_ROOT%StatTrack.dll"
 set "PATCHER_EXE=%RELEASE_ROOT%V1StockAssemblyPatcher.exe"
@@ -162,15 +166,17 @@ if errorlevel 1 exit /b 0
 call :isAdministrator
 if not errorlevel 1 exit /b 0
 echo.
-echo Administrator permissions are required to install into:
-echo %GAME_DIR%
-echo.
-echo Relaunching the installer as administrator...
-set "ELEVATE_SCRIPT=%~f0"
-set "ELEVATE_GAME_DIR=%GAME_DIR%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:ELEVATE_SCRIPT -ArgumentList @($env:ELEVATE_GAME_DIR) -Verb RunAs"
-set "ELEVATE_SCRIPT="
-set "ELEVATE_GAME_DIR="
+ echo Administrator permissions are required to install into:
+ echo %GAME_DIR%
+ echo.
+ echo Relaunching the installer as administrator...
+ set "ELEVATE_SCRIPT=%~f0"
+ set "ELEVATE_GAME_DIR=%GAME_DIR%"
+ set "ELEVATE_RELEASE_ROOT=%RELEASE_ROOT%"
+ powershell -NoProfile -ExecutionPolicy Bypass -Command "$scriptPath = $env:ELEVATE_SCRIPT; $releaseRoot = $env:ELEVATE_RELEASE_ROOT; $commandLine = 'call ' + [char]34 + $scriptPath + [char]34; Start-Process -FilePath $env:ComSpec -WorkingDirectory $releaseRoot -ArgumentList @('/k', $commandLine) -Verb RunAs"
+ set "ELEVATE_SCRIPT="
+ set "ELEVATE_GAME_DIR="
+ set "ELEVATE_RELEASE_ROOT="
 if errorlevel 1 (
     echo Administrator elevation was cancelled or failed.
     exit /b 1
