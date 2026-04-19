@@ -18,7 +18,7 @@ internal static class V1StockAssemblyPatcher
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
     private const string VersionReplacementText =
-        "v1.0.0.4080 - OBS FRIENDLY VERSION\n" +
+        "StatTrack v1.0.1\n" +
         "<size=90%>Mod by Roxas27x</size>\n" +
         "<size=85%>Home / Ctrl +O / F8 to open the overlay</size>";
 

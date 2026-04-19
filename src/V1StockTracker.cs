@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -288,9 +289,18 @@ internal sealed class V1StockTracker
     private const float StableRunRefreshIntervalSeconds = 5f;
     private const float NotesHitRefreshIntervalSeconds = 2f;
     private const float ResultStatsRefreshIntervalSeconds = 1f;
+    private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
+    private const string PublicVersionNumber = "1.0.1";
+    private const string PublicVersionLabel = "StatTrack v1.0.1";
+    private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
+    private const string GitHubApiAcceptHeader = "application/vnd.github+json";
+    private const int GitHubReleaseCheckTimeoutMs = 5000;
 
     private const string GlobalVariablesTypeName = "GlobalVariables";
+    private const string ActiveChartFieldName = "\u02B4\u02BC\u02BF\u02BC\u02BA\u02B9\u02B8\u02B2\u02BD\u02BE\u02BD";
+    private const string CurrentSectionTickFieldName = "\u02BA\u02BC\u02B2\u02BE\u02B7\u02C0\u02BD\u02B7\u02B2\u02B9\u02BF";
+    private const string SongPlaybackTimeFieldName = "\u02b7\u02b4\u02ba\u02b5\u02b5\u02b8\u02be\u02b5\u02b3\u02b5\u02bb";
     private const string BasePlayerTypeName = "BasePlayer";
     private const string SngFileIdentifier = "SNGPKG";
     private const string PracticeUiFieldName = "ʳʺˀˁʴˀʳˁʴʴʽ";
@@ -328,6 +338,7 @@ internal sealed class V1StockTracker
     private readonly object _fileWriteSync = new();
     private readonly object _exportWorkerSync = new();
     private readonly AutoResetEvent _exportSignal = new(false);
+    private readonly object _updateCheckSync = new();
     private const string DesktopOverlayExeName = "StatTrackOverlay.exe";
     private const float DesktopOverlayCheckIntervalSeconds = 5f;
     private bool _memoryDirty;
@@ -341,16 +352,22 @@ internal sealed class V1StockTracker
     private List<CompletedRunRecord> _completedRunsSnapshot = new();
     private Thread? _exportThread;
     private ExportWorkItem? _pendingExport;
+    private bool _updateCheckStarted;
+    private bool _updateAvailable;
+    private string? _latestReleaseVersionLabel;
 
     private Type? _gameManagerType;
     private Type? _globalVariablesType;
     private Type? _basePlayerType;
     private Type? _gameSettingType;
+    private FieldInfo? _mainMenuVersionLabelField;
     private FieldInfo? _playersField;
     private FieldInfo? _mainPlayerField;
     private FieldInfo? _practiceUiField;
     private FieldInfo? _songDurationField;
     private FieldInfo? _songTimeField;
+    private FieldInfo? _songPlaybackTimeField;
+    private FieldInfo? _currentSectionTickField;
     private FieldInfo? _chartField;
     private FieldInfo? _controllerField;
     private FieldInfo? _scoreField;
@@ -371,10 +388,15 @@ internal sealed class V1StockTracker
     private MethodInfo? _chartSectionsMethod;
     private MethodInfo? _chartSectionTimeMethod;
     private FieldInfo? _chartNamedSectionsField;
+    private MethodInfo? _runtimeChartSectionsMethod;
+    private MethodInfo? _runtimeChartSectionTimeMethod;
     private MethodInfo? _songEntryLoadChartMethod;
     private MethodInfo? _songEntryLoadChartWithFlagMethod;
+    private MethodInfo? _loadedChartTickToTimeMethod;
+    private MethodInfo? _loadedChartMaxTickMethod;
     private PropertyInfo? _resultStatsArrayProperty;
     private Type? _playerStatsType;
+    private PropertyInfo? _textComponentTextProperty;
     private FieldInfo? _playerStatsScoreField;
     private FieldInfo? _playerStatsNotesHitField;
     private FieldInfo? _playerStatsTotalNotesField;
@@ -387,6 +409,9 @@ internal sealed class V1StockTracker
     private bool _resultStatsReflectionScanCompleted;
     private float _lastChartFieldDiagnosticsAt;
     private float _lastDiagnosticsAt;
+    private float _lastTimingDiagnosticsAt = -999f;
+    private string _lastTimingDiagnosticsSongKey = string.Empty;
+    private string _lastTimingSectionDumpKey = string.Empty;
     private bool _ghostNotesFieldCalibrated;
     private string? _playerTypeCachedForStats;
     private readonly List<PlayerMissCounter> _exactMissCounters = new();
@@ -461,6 +486,227 @@ internal sealed class V1StockTracker
         EnsureInitialized(mainMenu.GetType().Assembly);
         _gameManagerType ??= mainMenu.GetType().Assembly.GetType("GameManager");
         CacheReflection();
+        EnsureReleaseCheckStarted();
+        ApplyMainMenuVersionText(mainMenu);
+    }
+
+    private void EnsureReleaseCheckStarted()
+    {
+        lock (_updateCheckSync)
+        {
+            if (_updateCheckStarted)
+            {
+                return;
+            }
+
+            _updateCheckStarted = true;
+        }
+
+        ThreadPool.QueueUserWorkItem(_ => CheckForLatestRelease());
+    }
+
+    private void CheckForLatestRelease()
+    {
+        try
+        {
+            TrySetStaticNetProperty(typeof(ServicePointManager), "SecurityProtocol", SecurityProtocolType.Tls12);
+
+            var request = (HttpWebRequest)WebRequest.Create(GitHubLatestReleaseApiUrl);
+            request.Method = "GET";
+            TrySetNetProperty(request, "Accept", GitHubApiAcceptHeader);
+            TrySetNetProperty(request, "UserAgent", $"StatTrackCH/{PublicVersionNumber}");
+            TrySetNetProperty(request, "Timeout", GitHubReleaseCheckTimeoutMs);
+            TrySetNetProperty(request, "ReadWriteTimeout", GitHubReleaseCheckTimeoutMs);
+            TrySetNetProperty(request, "AutomaticDecompression", DecompressionMethods.GZip | DecompressionMethods.Deflate);
+
+            using var response = (HttpWebResponse)request.GetResponse();
+            using var stream = response.GetResponseStream();
+            if (stream == null)
+            {
+                return;
+            }
+
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            string json = reader.ReadToEnd();
+            GitHubLatestReleaseResponse? release = JsonConvert.DeserializeObject<GitHubLatestReleaseResponse>(json);
+            string? latestVersionLabel = ExtractReleaseVersionLabel(release?.TagName, release?.Name);
+            Version? currentVersion = TryParseComparableVersion(PublicVersionNumber);
+            Version? latestVersion = TryParseComparableVersion(latestVersionLabel);
+
+            lock (_updateCheckSync)
+            {
+                _latestReleaseVersionLabel = latestVersionLabel;
+                _updateAvailable =
+                    latestVersion != null &&
+                    currentVersion != null &&
+                    latestVersion.CompareTo(currentVersion) > 0;
+            }
+
+            if (_updateAvailable && !string.IsNullOrWhiteSpace(latestVersionLabel))
+            {
+                StockTrackerLog.Write($"UpdateAvailable | current={PublicVersionLabel} latest={latestVersionLabel}");
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write($"ReleaseCheckFailure | {ex.GetType().Name} | {ex.Message}");
+        }
+    }
+
+    private void ApplyMainMenuVersionText(object mainMenu)
+    {
+        try
+        {
+            object? versionLabel = ResolveMainMenuVersionLabel(mainMenu);
+            if (versionLabel == null)
+            {
+                return;
+            }
+
+            PropertyInfo? textProperty = ResolveTextProperty(versionLabel.GetType());
+            if (textProperty == null)
+            {
+                return;
+            }
+
+            string desiredText = BuildMainMenuVersionText();
+            string currentText = SafeGetPropertyValue(textProperty, versionLabel)?.ToString() ?? string.Empty;
+            if (string.Equals(currentText, desiredText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            textProperty.SetValue(versionLabel, desiredText, null);
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.WriteDebug($"MainMenuVersionTextFailure | {ex.GetType().Name} | {ex.Message}");
+        }
+    }
+
+    private object? ResolveMainMenuVersionLabel(object mainMenu)
+    {
+        Type mainMenuType = mainMenu.GetType();
+        if (_mainMenuVersionLabelField == null || _mainMenuVersionLabelField.DeclaringType != mainMenuType)
+        {
+            _mainMenuVersionLabelField = GetAllFields(mainMenuType).FirstOrDefault(field =>
+                string.Equals(field.FieldType.FullName, "TMPro.TextMeshProUGUI", StringComparison.Ordinal));
+        }
+
+        return _mainMenuVersionLabelField?.GetValue(mainMenu);
+    }
+
+    private PropertyInfo? ResolveTextProperty(Type textComponentType)
+    {
+        if (_textComponentTextProperty != null && _textComponentTextProperty.DeclaringType == textComponentType)
+        {
+            return _textComponentTextProperty;
+        }
+
+        _textComponentTextProperty = GetAllProperties(textComponentType).FirstOrDefault(property =>
+            string.Equals(property.Name, "text", StringComparison.Ordinal) &&
+            property.CanWrite &&
+            property.PropertyType == typeof(string));
+        return _textComponentTextProperty;
+    }
+
+    private string BuildMainMenuVersionText()
+    {
+        string versionText =
+            PublicVersionLabel + "\n" +
+            "<size=90%>Mod by Roxas27x</size>\n" +
+            "<size=85%>Home / Ctrl +O / F8 to open the overlay</size>";
+
+        lock (_updateCheckSync)
+        {
+            if (_updateAvailable && !string.IsNullOrWhiteSpace(_latestReleaseVersionLabel))
+            {
+                versionText += "\n" +
+                    $"<size=85%><color=#F2C94C>Update available: {_latestReleaseVersionLabel}</color></size>";
+            }
+        }
+
+        return versionText;
+    }
+
+    private static string? ExtractReleaseVersionLabel(params string?[] candidates)
+    {
+        foreach (string? candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            Match match = Regex.Match(candidate, @"(?i)\bv?(\d+(?:\.\d+){1,3})\b");
+            if (match.Success)
+            {
+                return "v" + match.Groups[1].Value;
+            }
+        }
+
+        return null;
+    }
+
+    private static Version? TryParseComparableVersion(string? versionText)
+    {
+        if (string.IsNullOrWhiteSpace(versionText))
+        {
+            return null;
+        }
+
+        Match match = Regex.Match(versionText, @"(?i)\bv?(\d+(?:\.\d+){1,3})\b");
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        string[] parts = match.Groups[1].Value.Split('.');
+        int[] values = new int[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (!int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out values[i]))
+            {
+                return null;
+            }
+        }
+
+        try
+        {
+            return values.Length switch
+            {
+                2 => new Version(values[0], values[1]),
+                3 => new Version(values[0], values[1], values[2]),
+                4 => new Version(values[0], values[1], values[2], values[3]),
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TrySetNetProperty(object instance, string propertyName, object value)
+    {
+        try
+        {
+            instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public)?.SetValue(instance, value, null);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TrySetStaticNetProperty(Type type, string propertyName, object value)
+    {
+        try
+        {
+            type.GetProperty(propertyName, BindingFlags.Static | BindingFlags.Public)?.SetValue(null, value, null);
+        }
+        catch
+        {
+        }
     }
 
     public void HandleOverlayUpdate()
@@ -2448,7 +2694,10 @@ internal sealed class V1StockTracker
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(field => field.FieldType == typeof(double));
         _songTimeField ??= _gameManagerType.GetField(SongTimeFieldName, AnyInstance)
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(field => field.FieldType == typeof(double) && field != _songDurationField);
-        _chartField ??= _gameManagerType.GetField(CurrentChartFieldName, AnyInstance)
+        _songPlaybackTimeField ??= _gameManagerType.GetField(SongPlaybackTimeFieldName, AnyInstance);
+        _currentSectionTickField ??= _gameManagerType.GetField(CurrentSectionTickFieldName, AnyInstance);
+        _chartField ??= _gameManagerType.GetField(ActiveChartFieldName, AnyInstance)
+            ?? _gameManagerType.GetField(CurrentChartFieldName, AnyInstance)
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(field => field.Name.IndexOf("k__BackingField", StringComparison.Ordinal) >= 0)
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(IsChartLikeField);
 
@@ -2575,15 +2824,60 @@ internal sealed class V1StockTracker
         _runState.LastMissedNotes = currentMissedNotes;
     }
 
+    private bool ShouldPreserveInSongStateDuringTransientContextLoss()
+    {
+        return _runState.InRun &&
+            _latestState.IsInSong &&
+            (Mathf.Abs(Time.timeScale) <= 0.001f ||
+             Time.unscaledTime - _runState.LastStableRefreshAt < StableRunRefreshIntervalSeconds);
+    }
+
+    private TrackerState BuildTransientInSongState()
+    {
+        TrackerState preservedState = _latestState ?? CreateIdleState();
+        preservedState.OverlayEditorVisible = _overlayEditorVisible;
+        return preservedState;
+    }
+
+    private static bool LooksLikeActualRestart(double songTime, int score, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes)
+    {
+        if (songTime > 2.0d)
+        {
+            return false;
+        }
+
+        return score <= 0 &&
+            streak <= 0 &&
+            currentGhostNotes <= 0 &&
+            currentOverstrums <= 0 &&
+            currentMissedNotes <= 0;
+    }
+
+    private static bool LooksLikeReturnToSongStart(double previousSongTime, double currentSongTime)
+    {
+        return currentSongTime <= 2.0d &&
+            previousSongTime >= currentSongTime + 2.0d;
+    }
+
     private TrackerState BuildState(object gameManager)
     {
-        object? activeChartHint = _chartField?.GetValue(gameManager);
+        object? currentSongEntryHint = null;
+        try
+        {
+            object? globalVariables = _globalVariablesSingletonField?.GetValue(null);
+            currentSongEntryHint = globalVariables == null ? null : _globalVariablesCurrentSongField?.GetValue(globalVariables);
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+        }
+
         bool stableCacheLooksValid =
             _runState.CachedSongEntry != null &&
             _runState.CachedPlayer != null &&
             _runState.CachedChart != null &&
-            activeChartHint != null &&
-            ReferenceEquals(activeChartHint, _runState.CachedChart);
+            currentSongEntryHint != null &&
+            ReferenceEquals(currentSongEntryHint, _runState.CachedSongEntry);
 
         bool canUseStableRunCache = stableCacheLooksValid &&
             Time.unscaledTime - _runState.LastStableRefreshAt < StableRunRefreshIntervalSeconds;
@@ -2594,22 +2888,22 @@ internal sealed class V1StockTracker
 
         if (!canUseStableRunCache)
         {
-            try
-            {
-                object? globalVariables = _globalVariablesSingletonField?.GetValue(null);
-                songEntry = globalVariables == null ? null : _globalVariablesCurrentSongField?.GetValue(globalVariables);
-            }
-            catch (Exception ex)
-            {
-                StockTrackerLog.Write(ex);
-            }
-
+            songEntry = currentSongEntryHint;
             player = GetPreferredActivePlayer(gameManager);
             chart = _chartField?.GetValue(gameManager);
+            if (songEntry != null)
+            {
+                chart ??= LoadChartFromSongEntry(songEntry);
+            }
         }
 
         if (player == null || songEntry == null || chart == null)
         {
+            if (ShouldPreserveInSongStateDuringTransientContextLoss())
+            {
+                return BuildTransientInSongState();
+            }
+
             LogDiagnostics(gameManager, songEntry, player, chart);
             ResetRunIfNeeded();
             return CreateIdleState();
@@ -2633,6 +2927,8 @@ internal sealed class V1StockTracker
         }
 
         double songTime = ConvertToDouble(_songTimeField?.GetValue(gameManager));
+        double currentSectionSongTime = ReadCurrentSectionSongTime(gameManager, songTime);
+        int currentChartTick = ReadCurrentChartTick(gameManager);
         double songDuration = canUseStableRunCache
             ? _runState.CachedSongDuration
             : ConvertToDouble(_songDurationField?.GetValue(gameManager));
@@ -2701,16 +2997,23 @@ internal sealed class V1StockTracker
             _runState.HasCachedNotesHit = true;
         }
 
-        bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
-        bool restarted = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
-        if ((newSong || restarted || !_runState.InRun) && (requirements.NeedRunTracking || requirements.NeedCompletedRunTracking || requirements.NeedMissedNotes))
-        {
-            ResetExactMissCounter(player);
-        }
-
         int currentMissedNotes = requirements.NeedMissedNotes || requirements.NeedRunTracking || requirements.NeedCompletedRunTracking
             ? ReadExactMissedNotesCount(player)
             : 0;
+        bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
+        bool songTimeWentBackwards = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        bool restarted = songTimeWentBackwards &&
+            (LooksLikeActualRestart(songTime, score, streak, currentGhostNotes, currentOverstrums, currentMissedNotes) ||
+             LooksLikeReturnToSongStart(_runState.LastSongTime, songTime));
+        if ((newSong || restarted || !_runState.InRun) && (requirements.NeedRunTracking || requirements.NeedCompletedRunTracking || requirements.NeedMissedNotes))
+        {
+            ResetExactMissCounter(player);
+            if (restarted)
+            {
+                currentMissedNotes = 0;
+            }
+        }
+
         bool isNearSongEnd = songDuration > 1d && songTime >= songDuration - 1.5d;
         bool shouldReadResultStats = requirements.NeedResultStats &&
             isNearSongEnd &&
@@ -2752,7 +3055,7 @@ internal sealed class V1StockTracker
         }
 
         List<SectionDescriptor> sections = requirements.NeedSections || requirements.NeedRunTracking || requirements.NeedCompletedRunTracking
-            ? BuildSections(chart, songEntry, song.SongKey)
+            ? BuildSections(chart, songEntry, song.SongKey, song.SongSpeedPercent, songDuration)
             : new List<SectionDescriptor>();
         if (sections.Count > 0)
         {
@@ -2762,8 +3065,9 @@ internal sealed class V1StockTracker
         }
 
         string currentSectionName = requirements.NeedCurrentSection || requirements.NeedRunTracking || requirements.NeedCompletedRunTracking
-            ? GetCurrentSectionName(sections, songTime)
+            ? GetCurrentSectionName(sections, currentSectionSongTime, currentChartTick)
             : string.Empty;
+        LogTimingDiagnostics(song, sections, songTime, currentSectionSongTime, songDuration, isPractice, currentChartTick);
         SongMemory songMemory =
             requirements.NeedSongMemory
                 ? (_runState.CachedSongMemory != null &&
@@ -3016,7 +3320,7 @@ internal sealed class V1StockTracker
     private bool TryResolveCurrentSectionNameForNoteSplitEvent(out string sectionName)
     {
         sectionName = string.Empty;
-        if (_activeGameManager == null || _songTimeField == null)
+        if (_activeGameManager == null)
         {
             return false;
         }
@@ -3047,9 +3351,115 @@ internal sealed class V1StockTracker
             return false;
         }
 
-        double songTime = ConvertToDouble(_songTimeField.GetValue(_activeGameManager));
-        sectionName = GetCurrentSectionName(sections, songTime);
+        double rawSongTime = ConvertToDouble(_songTimeField?.GetValue(_activeGameManager));
+        double songTime = ReadCurrentSectionSongTime(_activeGameManager, rawSongTime);
+        int currentChartTick = ReadCurrentChartTick(_activeGameManager);
+        sectionName = GetCurrentSectionName(sections, songTime, currentChartTick);
         return !string.IsNullOrWhiteSpace(sectionName);
+    }
+
+    private double ReadCurrentSectionSongTime(object gameManager, double fallbackSongTime)
+    {
+        try
+        {
+            double playbackSongTime = ConvertToDouble(_songPlaybackTimeField?.GetValue(gameManager));
+            if (!double.IsNaN(playbackSongTime) &&
+                !double.IsInfinity(playbackSongTime) &&
+                playbackSongTime >= 0d)
+            {
+                return playbackSongTime;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogVerbose($"PlaybackSongTimeReadFailure | {ex.Message}");
+        }
+
+        return fallbackSongTime;
+    }
+
+    private int ReadCurrentChartTick(object gameManager)
+    {
+        try
+        {
+            object? rawValue = _currentSectionTickField?.GetValue(gameManager);
+            int chartTick = rawValue switch
+            {
+                uint value => checked((int)value),
+                int value => value,
+                _ => -1
+            };
+
+            return chartTick >= 0 ? chartTick : -1;
+        }
+        catch (Exception ex)
+        {
+            LogVerbose($"CurrentChartTickReadFailure | {ex.Message}");
+            return -1;
+        }
+    }
+
+    private void LogTimingDiagnostics(SongDescriptor song, IReadOnlyList<SectionDescriptor> sections, double progressSongTime, double playbackSongTime, double songDuration, bool isPractice, int currentChartTick)
+    {
+        if (song.SongSpeedPercent == 100 && !isPractice)
+        {
+            return;
+        }
+
+        string timingKey = $"{song.SongKey}|{song.SongSpeedPercent}|{(isPractice ? 1 : 0)}";
+        if (!string.Equals(_lastTimingSectionDumpKey, timingKey, StringComparison.Ordinal))
+        {
+            _lastTimingSectionDumpKey = timingKey;
+            StockTrackerLog.Write(
+                "TimingDiagSections | " +
+                $"songKey={song.SongKey} " +
+                $"title={song.Title} " +
+                $"speed={song.SongSpeedPercent} " +
+                $"practice={(isPractice ? 1 : 0)} " +
+                $"count={sections.Count}");
+
+            for (int i = 0; i < sections.Count; i++)
+            {
+                SectionDescriptor section = sections[i];
+                StockTrackerLog.Write(
+                    "TimingDiagSection | " +
+                    $"songKey={song.SongKey} " +
+                    $"speed={song.SongSpeedPercent} " +
+                    $"index={section.Index} " +
+                    $"name={GetSectionDisplayName(section)} " +
+                    $"tick={section.Tick} " +
+                    $"start={section.StartTime.ToString("0.000", CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        if (string.Equals(_lastTimingDiagnosticsSongKey, timingKey, StringComparison.Ordinal) &&
+            Time.unscaledTime - _lastTimingDiagnosticsAt < TimingDiagnosticsIntervalSeconds)
+        {
+            return;
+        }
+
+        _lastTimingDiagnosticsSongKey = timingKey;
+        _lastTimingDiagnosticsAt = Time.unscaledTime;
+
+        string progressSection = GetCurrentSectionName(sections, progressSongTime, -1);
+        string playbackSection = GetCurrentSectionName(sections, playbackSongTime, -1);
+        string tickSection = GetCurrentSectionName(sections, playbackSongTime, currentChartTick);
+        double delta = playbackSongTime - progressSongTime;
+        string clockSource = _songPlaybackTimeField != null ? "playback" : "progress_fallback";
+        StockTrackerLog.Write(
+            "TimingDiagTick | " +
+            $"songKey={song.SongKey} " +
+            $"speed={song.SongSpeedPercent} " +
+            $"practice={(isPractice ? 1 : 0)} " +
+            $"clockSource={clockSource} " +
+            $"tick={currentChartTick} " +
+            $"progress={progressSongTime.ToString("0.000", CultureInfo.InvariantCulture)} " +
+            $"playback={playbackSongTime.ToString("0.000", CultureInfo.InvariantCulture)} " +
+            $"delta={delta.ToString("0.000", CultureInfo.InvariantCulture)} " +
+            $"duration={songDuration.ToString("0.000", CultureInfo.InvariantCulture)} " +
+            $"progressSection={progressSection} " +
+            $"playbackSection={playbackSection} " +
+            $"tickSection={tickSection}");
     }
 
     private void ApplyPendingNoteSplitMisses(string sectionName)
@@ -3684,11 +4094,23 @@ internal sealed class V1StockTracker
         }
     }
 
-    private List<SectionDescriptor> BuildSections(object chart, object songEntry, string songKey)
+    private List<SectionDescriptor> BuildSections(object chart, object songEntry, string songKey, int songSpeedPercent, double liveSongDuration)
     {
         if (_songSectionsCache.TryGetValue(songKey, out List<SectionDescriptor>? cachedSections) && cachedSections.Count > 0)
         {
             return cachedSections;
+        }
+
+        List<SectionDescriptor> runtimeChartSections = TryBuildSectionsFromRuntimeChartSections(chart);
+        if (runtimeChartSections.Count > 0)
+        {
+            return CacheSections(songKey, runtimeChartSections, songSpeedPercent, liveSongDuration, chart, applySpeedScaling: false);
+        }
+
+        List<SectionDescriptor> runtimeTimedSections = TryBuildSectionsFromLoadedChartTiming(chart, songEntry, songKey);
+        if (runtimeTimedSections.Count > 0)
+        {
+            return CacheSections(songKey, runtimeTimedSections, songSpeedPercent, liveSongDuration, chart);
         }
 
         var sections = new List<SectionDescriptor>();
@@ -3719,7 +4141,7 @@ internal sealed class V1StockTracker
 
         if (sections.Count > 0)
         {
-            return CacheSections(songKey, sections);
+            return CacheSections(songKey, sections, songSpeedPercent, liveSongDuration, chart);
         }
 
         if (_chartSectionsMethod != null && _chartSectionTimeMethod != null)
@@ -3746,7 +4168,7 @@ internal sealed class V1StockTracker
 
         if (sections.Count > 0)
         {
-            return CacheSections(songKey, sections);
+            return CacheSections(songKey, sections, songSpeedPercent, liveSongDuration, chart);
         }
 
         foreach (FieldInfo field in GetAllFields(chart.GetType()))
@@ -3788,24 +4210,27 @@ internal sealed class V1StockTracker
 
             if (sections.Count > 0)
             {
-                return CacheSections(songKey, sections);
+                return CacheSections(songKey, sections, songSpeedPercent, liveSongDuration, chart);
             }
         }
 
         LogChartFields(chart);
         LogChartMethods(chart);
-        List<SectionDescriptor> fallbackSections = BuildSectionsFromSng(songEntry, chart, songKey);
+        List<SectionDescriptor> fallbackSections = BuildSectionsFromSng(songEntry, chart, songKey, songSpeedPercent, liveSongDuration);
         if (fallbackSections.Count > 0)
         {
-            return CacheSections(songKey, fallbackSections);
+            return CacheSections(songKey, fallbackSections, songSpeedPercent, liveSongDuration, chart);
         }
 
         return sections;
     }
 
-    private List<SectionDescriptor> CacheSections(string songKey, IEnumerable<SectionDescriptor> sections)
+    private List<SectionDescriptor> CacheSections(string songKey, IEnumerable<SectionDescriptor> sections, int songSpeedPercent, double liveSongDuration, object? chart = null, bool applySpeedScaling = true)
     {
-        List<SectionDescriptor> orderedSections = sections
+        List<SectionDescriptor> normalizedSections = applySpeedScaling
+            ? NormalizeSectionsForPlayback(sections, songSpeedPercent, liveSongDuration, TryGetLoadedChartBaseDuration(chart))
+            : CloneSections(sections);
+        List<SectionDescriptor> orderedSections = normalizedSections
             .OrderBy(section => section.StartTime)
             .ThenBy(section => section.Index)
             .ToList();
@@ -3813,6 +4238,335 @@ internal sealed class V1StockTracker
         _songSectionsCache[songKey] = orderedSections;
         _songSectionNamesCache[songKey] = orderedSections.Select(GetSectionDisplayName).ToList();
         return orderedSections;
+    }
+
+    private static List<SectionDescriptor> NormalizeSectionsForPlayback(IEnumerable<SectionDescriptor> sections, int songSpeedPercent, double liveSongDuration, double? baseSongDuration)
+    {
+        double scale = 1d;
+        if (baseSongDuration.GetValueOrDefault() > 1d && liveSongDuration > 1d)
+        {
+            scale = liveSongDuration / baseSongDuration!.Value;
+        }
+        else
+        {
+            double speedMultiplier = songSpeedPercent > 0
+                ? songSpeedPercent / 100d
+                : 1d;
+            if (speedMultiplier > 0d)
+            {
+                scale = 1d / speedMultiplier;
+            }
+        }
+
+        var adjustedSections = new List<SectionDescriptor>();
+        foreach (SectionDescriptor section in sections)
+        {
+            adjustedSections.Add(new SectionDescriptor
+            {
+                Index = section.Index,
+                Name = section.Name,
+                Tick = section.Tick,
+                StartTime = section.StartTime * scale
+            });
+        }
+
+        return adjustedSections;
+    }
+
+    private static List<SectionDescriptor> CloneSections(IEnumerable<SectionDescriptor> sections)
+    {
+        var clonedSections = new List<SectionDescriptor>();
+        foreach (SectionDescriptor section in sections)
+        {
+            clonedSections.Add(new SectionDescriptor
+            {
+                Index = section.Index,
+                Name = section.Name,
+                Tick = section.Tick,
+                StartTime = section.StartTime
+            });
+        }
+
+        return clonedSections;
+    }
+
+    private List<SectionDescriptor> TryBuildSectionsFromRuntimeChartSections(object chart)
+    {
+        IEnumerable? runtimeSections = TryGetRuntimeChartSections(chart);
+        if (runtimeSections == null)
+        {
+            return new List<SectionDescriptor>();
+        }
+
+        var sections = new List<SectionDescriptor>();
+        int index = 0;
+        foreach (object? section in runtimeSections)
+        {
+            if (section == null)
+            {
+                index++;
+                continue;
+            }
+
+            string name = ExtractSectionName(section, index);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                index++;
+                continue;
+            }
+
+            double startTime = TryGetRuntimeChartSectionTime(section);
+            if (double.IsNaN(startTime) || double.IsInfinity(startTime))
+            {
+                return new List<SectionDescriptor>();
+            }
+
+            sections.Add(new SectionDescriptor
+            {
+                Index = index,
+                Name = name,
+                Tick = ExtractRuntimeChartSectionTick(section),
+                StartTime = startTime
+            });
+
+            index++;
+        }
+
+        return sections;
+    }
+
+    private IEnumerable? TryGetRuntimeChartSections(object chart)
+    {
+        try
+        {
+            MethodInfo? sectionsMethod = ResolveRuntimeChartSectionsMethod(chart.GetType());
+            return sectionsMethod?.Invoke(chart, null) as IEnumerable;
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+            return null;
+        }
+    }
+
+    private MethodInfo? ResolveRuntimeChartSectionsMethod(Type chartType)
+    {
+        if (_runtimeChartSectionsMethod?.DeclaringType == chartType)
+        {
+            return _runtimeChartSectionsMethod;
+        }
+
+        _runtimeChartSectionsMethod = GetAllMethods(chartType)
+            .Where(method => !method.IsStatic && method.GetParameters().Length == 0)
+            .FirstOrDefault(method =>
+            {
+                if (!typeof(IEnumerable).IsAssignableFrom(method.ReturnType))
+                {
+                    return false;
+                }
+
+                Type? itemType = GetEnumerableItemType(method.ReturnType);
+                return itemType != null && LooksLikeRuntimeChartSectionItem(itemType);
+            });
+
+        return _runtimeChartSectionsMethod;
+    }
+
+    private MethodInfo? ResolveRuntimeChartSectionTimeMethod(Type sectionType)
+    {
+        if (_runtimeChartSectionTimeMethod != null &&
+            _runtimeChartSectionTimeMethod.DeclaringType != null &&
+            _runtimeChartSectionTimeMethod.DeclaringType.IsAssignableFrom(sectionType))
+        {
+            return _runtimeChartSectionTimeMethod;
+        }
+
+        _runtimeChartSectionTimeMethod = GetAllMethods(sectionType)
+            .FirstOrDefault(method =>
+                !method.IsStatic &&
+                method.GetParameters().Length == 0 &&
+                (method.ReturnType == typeof(float) || method.ReturnType == typeof(double)));
+
+        return _runtimeChartSectionTimeMethod;
+    }
+
+    private static bool LooksLikeRuntimeChartSectionItem(Type sectionType)
+    {
+        bool hasName = GetAllFields(sectionType).Any(field => field.FieldType == typeof(string)) ||
+            GetAllProperties(sectionType).Any(property => property.PropertyType == typeof(string));
+        if (!hasName)
+        {
+            return false;
+        }
+
+        bool hasTick = GetAllFields(sectionType).Any(field => field.FieldType == typeof(uint) || field.FieldType == typeof(int));
+        if (!hasTick)
+        {
+            return false;
+        }
+
+        bool hasTimeMethod = GetAllMethods(sectionType).Any(method =>
+            !method.IsStatic &&
+            method.GetParameters().Length == 0 &&
+            (method.ReturnType == typeof(float) || method.ReturnType == typeof(double)));
+        if (!hasTimeMethod)
+        {
+            return false;
+        }
+
+        bool hasEnumFields = GetAllFields(sectionType).Any(field => field.FieldType.IsEnum);
+        return !hasEnumFields;
+    }
+
+    private double TryGetRuntimeChartSectionTime(object section)
+    {
+        try
+        {
+            MethodInfo? timeMethod = ResolveRuntimeChartSectionTimeMethod(section.GetType());
+            if (timeMethod != null)
+            {
+                return ConvertToDouble(timeMethod.Invoke(section, null));
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+        }
+
+        return ExtractSectionTime(section, 0);
+    }
+
+    private static int ExtractRuntimeChartSectionTick(object section)
+    {
+        object? tickValue = GetAllFields(section.GetType())
+            .Where(field => field.FieldType == typeof(uint))
+            .Select(field => field.GetValue(section))
+            .FirstOrDefault();
+        if (tickValue != null)
+        {
+            return ConvertToInt32(tickValue);
+        }
+
+        tickValue = GetAllFields(section.GetType())
+            .Where(field => field.FieldType == typeof(int))
+            .Select(field => field.GetValue(section))
+            .FirstOrDefault();
+        return tickValue != null ? ConvertToInt32(tickValue) : -1;
+    }
+
+    private List<SectionDescriptor> TryBuildSectionsFromLoadedChartTiming(object chart, object songEntry, string songKey)
+    {
+        MethodInfo? tickToTimeMethod = ResolveLoadedChartTickToTimeMethod(chart.GetType());
+        if (tickToTimeMethod == null)
+        {
+            return new List<SectionDescriptor>();
+        }
+
+        List<SectionDescriptor> sourceSections = ExtractSectionsFromSongEntry(songEntry, songKey)
+            .Where(section => !string.IsNullOrWhiteSpace(section.Name) && section.Tick >= 0)
+            .ToList();
+        if (sourceSections.Count == 0)
+        {
+            return new List<SectionDescriptor>();
+        }
+
+        var sections = new List<SectionDescriptor>(sourceSections.Count);
+        foreach (SectionDescriptor section in sourceSections)
+        {
+            object? rawStartTime = tickToTimeMethod.Invoke(chart, new object[] { (uint)section.Tick });
+            double startTime = ConvertToDouble(rawStartTime);
+            if (double.IsNaN(startTime) || double.IsInfinity(startTime))
+            {
+                return new List<SectionDescriptor>();
+            }
+
+            sections.Add(new SectionDescriptor
+            {
+                Index = section.Index,
+                Name = section.Name,
+                Tick = section.Tick,
+                StartTime = startTime
+            });
+        }
+
+        return sections;
+    }
+
+    private MethodInfo? ResolveLoadedChartTickToTimeMethod(Type chartType)
+    {
+        if (_loadedChartTickToTimeMethod?.DeclaringType == chartType)
+        {
+            return _loadedChartTickToTimeMethod;
+        }
+
+        _loadedChartTickToTimeMethod = GetAllMethods(chartType)
+            .FirstOrDefault(method =>
+                !method.IsStatic &&
+                method.GetParameters().Length == 1 &&
+                method.GetParameters()[0].ParameterType == typeof(uint) &&
+                (method.ReturnType == typeof(float) || method.ReturnType == typeof(double)));
+
+        return _loadedChartTickToTimeMethod;
+    }
+
+    private MethodInfo? ResolveLoadedChartMaxTickMethod(Type chartType)
+    {
+        if (_loadedChartMaxTickMethod?.DeclaringType == chartType)
+        {
+            return _loadedChartMaxTickMethod;
+        }
+
+        _loadedChartMaxTickMethod = GetAllMethods(chartType)
+            .FirstOrDefault(method =>
+                !method.IsStatic &&
+                method.GetParameters().Length == 0 &&
+                (method.ReturnType == typeof(uint) || method.ReturnType == typeof(int)));
+
+        return _loadedChartMaxTickMethod;
+    }
+
+    private double? TryGetLoadedChartBaseDuration(object? chart)
+    {
+        if (chart == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            MethodInfo? tickToTimeMethod = ResolveLoadedChartTickToTimeMethod(chart.GetType());
+            MethodInfo? maxTickMethod = ResolveLoadedChartMaxTickMethod(chart.GetType());
+            if (tickToTimeMethod == null || maxTickMethod == null)
+            {
+                return null;
+            }
+
+            object? rawMaxTick = maxTickMethod.Invoke(chart, null);
+            uint maxTick = rawMaxTick switch
+            {
+                uint value => value,
+                int value when value >= 0 => (uint)value,
+                _ => 0u
+            };
+
+            if (maxTick == 0u)
+            {
+                return null;
+            }
+
+            double baseDuration = ConvertToDouble(tickToTimeMethod.Invoke(chart, new object[] { maxTick }));
+            if (double.IsNaN(baseDuration) || double.IsInfinity(baseDuration) || baseDuration <= 0d)
+            {
+                return null;
+            }
+
+            return baseDuration;
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+            return null;
+        }
     }
 
     private static void AssignSectionDisplayNames(List<SectionDescriptor> sections)
@@ -3855,7 +4609,7 @@ internal sealed class V1StockTracker
         return null;
     }
 
-    private List<SectionDescriptor> BuildSectionsFromSng(object songEntry, object runtimeChart, string songKey)
+    private List<SectionDescriptor> BuildSectionsFromSng(object songEntry, object runtimeChart, string songKey, int songSpeedPercent, double liveSongDuration)
     {
         try
         {
@@ -3865,7 +4619,7 @@ internal sealed class V1StockTracker
                 return new List<SectionDescriptor>();
             }
 
-            return CacheSections(songKey, sections);
+            return CacheSections(songKey, sections, songSpeedPercent, liveSongDuration, runtimeChart);
         }
         catch (Exception ex)
         {
@@ -3940,6 +4694,7 @@ internal sealed class V1StockTracker
                 {
                     Index = index,
                     Name = name,
+                    Tick = -1,
                     StartTime = 0d
                 }).ToList();
             }
@@ -3956,50 +4711,6 @@ internal sealed class V1StockTracker
         }
 
         return sections;
-    }
-
-    private List<double> GetRuntimeSectionTimes(object chart)
-    {
-        try
-        {
-            if (_chartSectionsMethod != null)
-            {
-                object? value = _chartSectionsMethod.Invoke(chart, null);
-                if (value is IEnumerable enumerable && value is not string)
-                {
-                    List<double> numericTimes = enumerable.Cast<object?>()
-                        .Where(item => item != null && IsNumericType(item.GetType()))
-                        .Select(ConvertToDouble)
-                        .ToList();
-                    if (numericTimes.Count > 0)
-                    {
-                        return numericTimes;
-                    }
-                }
-            }
-
-            foreach (FieldInfo field in GetAllFields(chart.GetType()))
-            {
-                object? value = field.GetValue(chart);
-                if (value is Array array && (field.FieldType == typeof(float[]) || field.FieldType == typeof(double[])))
-                {
-                    List<double> numericTimes = array.Cast<object?>()
-                        .Where(item => item != null)
-                        .Select(ConvertToDouble)
-                        .ToList();
-                    if (numericTimes.Count > 1)
-                    {
-                        return numericTimes;
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            StockTrackerLog.Write(ex);
-        }
-
-        return new List<double>();
     }
 
     private List<string> ExtractSectionNamesFromChartFolder(string folderPath)
@@ -4458,6 +5169,7 @@ internal sealed class V1StockTracker
             {
                 Index = index,
                 Name = name,
+                Tick = tick,
                 StartTime = ConvertChartTickToSeconds(tick, resolution, tempoEvents)
             });
         }
@@ -4521,6 +5233,7 @@ internal sealed class V1StockTracker
             long trackEnd = stream.Position + trackLength;
             int absoluteTick = 0;
             int runningStatus = 0;
+            bool isEventsTrack = false;
 
             while (stream.Position < trackEnd)
             {
@@ -4556,7 +5269,12 @@ internal sealed class V1StockTracker
                             tempoEvents.Add(new TempoEvent { Tick = absoluteTick, BpmTimes1000 = bpmTimes1000 });
                         }
                     }
-                    else if (metaType == 0x01 || metaType == 0x05 || metaType == 0x06)
+                    else if (metaType == 0x03)
+                    {
+                        string trackName = Encoding.UTF8.GetString(data).Trim();
+                        isEventsTrack = string.Equals(trackName, "EVENTS", StringComparison.OrdinalIgnoreCase);
+                    }
+                    else if (isEventsTrack && (metaType == 0x01 || metaType == 0x05 || metaType == 0x06))
                     {
                         string? sectionName = ParseMidiSectionName(Encoding.UTF8.GetString(data));
                         if (!string.IsNullOrWhiteSpace(sectionName))
@@ -4599,6 +5317,7 @@ internal sealed class V1StockTracker
             {
                 Index = sections.Count,
                 Name = name,
+                Tick = tick,
                 StartTime = ConvertChartTickToSeconds(tick, resolution, tempoEvents)
             });
         }
@@ -4683,45 +5402,56 @@ internal sealed class V1StockTracker
         }
 
         string trimmed = text.Trim();
-        if (trimmed.StartsWith("[", StringComparison.Ordinal) && trimmed.EndsWith("]", StringComparison.Ordinal))
+        const string rb2SectionPrefix = "[section ";
+        const string rb3SectionPrefix = "[prc_";
+
+        if (trimmed.StartsWith(rb2SectionPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            string bracketed = trimmed.Substring(1, trimmed.Length - 2).Trim();
-            const string sectionPrefix = "section ";
-            if (bracketed.StartsWith(sectionPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                bracketed = bracketed.Substring(sectionPrefix.Length).Trim();
-            }
-
-            if (string.IsNullOrWhiteSpace(bracketed))
+            int endBracketIndex = trimmed.IndexOf(']');
+            if (endBracketIndex <= rb2SectionPrefix.Length)
             {
                 return null;
             }
 
-            string normalized = bracketed.Replace('_', ' ').Trim();
-            if (ShouldIgnoreMidiSectionName(normalized))
+            string sectionName = trimmed.Substring(rb2SectionPrefix.Length, endBracketIndex - rb2SectionPrefix.Length);
+            return NormalizeMidiSectionName(sectionName);
+        }
+
+        if (trimmed.StartsWith(rb3SectionPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            int endBracketIndex = trimmed.IndexOf(']');
+            if (endBracketIndex <= rb3SectionPrefix.Length)
             {
                 return null;
             }
 
-            return normalized;
+            int firstQuoteIndex = trimmed.IndexOf('"', endBracketIndex + 1);
+            if (firstQuoteIndex >= 0)
+            {
+                int lastQuoteIndex = trimmed.LastIndexOf('"');
+                if (lastQuoteIndex > firstQuoteIndex)
+                {
+                    string displayName = trimmed.Substring(firstQuoteIndex + 1, lastQuoteIndex - firstQuoteIndex - 1);
+                    return NormalizeMidiSectionName(displayName);
+                }
+            }
+
+            string sectionName = trimmed.Substring(rb3SectionPrefix.Length, endBracketIndex - rb3SectionPrefix.Length);
+            return NormalizeMidiSectionName(sectionName);
         }
 
         return null;
     }
 
-    private static bool ShouldIgnoreMidiSectionName(string name)
+    private static string? NormalizeMidiSectionName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return true;
+            return null;
         }
 
-        return string.Equals(name, "solo on", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "solo off", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "music start", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "end", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, "wail on", StringComparison.OrdinalIgnoreCase) ||
-            name.StartsWith("lighting ", StringComparison.OrdinalIgnoreCase);
+        string normalized = name.Replace('_', ' ').Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static int ReadVariableLengthQuantity(BinaryReader reader)
@@ -5056,11 +5786,44 @@ internal sealed class V1StockTracker
         return fromProperty != null ? ConvertToDouble(fromProperty) : index;
     }
 
-    private static string GetCurrentSectionName(List<SectionDescriptor> sections, double songTime)
+    private static string GetCurrentSectionName(IReadOnlyList<SectionDescriptor> sections, double songTime, int currentChartTick = -1)
     {
         if (sections.Count == 0)
         {
             return string.Empty;
+        }
+
+        if (currentChartTick >= 0)
+        {
+            SectionDescriptor? tickCurrent = null;
+            SectionDescriptor? firstTickSection = null;
+            foreach (SectionDescriptor section in sections)
+            {
+                if (section.Tick < 0)
+                {
+                    continue;
+                }
+
+                firstTickSection ??= section;
+                if (section.Tick <= currentChartTick)
+                {
+                    tickCurrent = section;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (tickCurrent != null)
+            {
+                return GetSectionDisplayName(tickCurrent);
+            }
+
+            if (firstTickSection != null)
+            {
+                return GetSectionDisplayName(firstTickSection);
+            }
         }
 
         SectionDescriptor current = sections[0];
@@ -5473,7 +6236,10 @@ internal sealed class V1StockTracker
     private void UpdateRunTracking(SongDescriptor song, SongMemory songMemory, SongConfig songConfig, string currentSectionName, double songTime, double songDuration, int score, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes, int currentNotesHit, PlayerStatsSnapshot? resultStats, bool isPractice, bool trackSongProgress, bool trackCompletedRuns)
     {
         bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
-        bool restarted = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        bool songTimeWentBackwards = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        bool restarted = songTimeWentBackwards &&
+            (LooksLikeActualRestart(songTime, score, streak, currentGhostNotes, currentOverstrums, currentMissedNotes) ||
+             LooksLikeReturnToSongStart(_runState.LastSongTime, songTime));
         bool startedFromSongSelect = !restarted &&
             !newSong &&
             _runState.InRun &&
@@ -5692,9 +6458,21 @@ internal sealed class V1StockTracker
             return;
         }
 
+        if (Mathf.Abs(Time.timeScale) <= 0.001f)
+        {
+            ApplyPendingNoteSplitMisses(_runState.NoteSplitCurrentSection);
+            return;
+        }
+
         if (string.Equals(_runState.NoteSplitCurrentSection, currentSectionName, StringComparison.Ordinal))
         {
             ApplyPendingNoteSplitMisses(currentSectionName);
+            return;
+        }
+
+        if (_runState.NoteSplitSectionsThisRun.ContainsKey(currentSectionName))
+        {
+            ApplyPendingNoteSplitMisses(_runState.NoteSplitCurrentSection);
             return;
         }
 
@@ -6811,6 +7589,7 @@ public sealed class SectionDescriptor
     public string Name { get; set; } = string.Empty;
     [JsonIgnore]
     public string DisplayName { get; set; } = string.Empty;
+    public int Tick { get; set; } = -1;
     public double StartTime { get; set; }
 }
 
@@ -7220,6 +7999,15 @@ internal sealed class MidiSectionParseResult
     public int Format { get; }
     public int TrackCount { get; }
     public List<SectionDescriptor> Sections { get; }
+}
+
+internal sealed class GitHubLatestReleaseResponse
+{
+    [JsonProperty("tag_name")]
+    public string? TagName { get; set; }
+
+    [JsonProperty("name")]
+    public string? Name { get; set; }
 }
 }
 
