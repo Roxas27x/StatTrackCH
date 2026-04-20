@@ -1,5 +1,13 @@
 StatTrack - Changelog
 
+2026-04-20
+- Reduced gameplay hitching by idling export work when unused and moving more save/export work off the gameplay path.
+- Improved desktop overlay and NoteSplit rendering so the overlay does less work during songs.
+- Fixed NoteSplit toggles reverting when enabled from the menu or during a song.
+- Fixed NoteSplit misses being credited to the wrong section at split boundaries.
+- Fixed NoteSplit large-font clipping in the header, footer, attempts block, and section rows.
+- Updated NoteSplit row backgrounds so they scale cleanly with larger row heights.
+
 2026-04-19
 - Added a previous valid run column to NoteSplit.
 - Previous valid run now preserves only the sections you actually reached before a restart.

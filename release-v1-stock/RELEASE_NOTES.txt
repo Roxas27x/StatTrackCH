@@ -1,16 +1,12 @@
-StatTrack v1.0.3
+StatTrack v1.0.4
 
-Fixed the GitHub update checker on the main menu. Older StatTrack builds should now correctly detect when a newer release is available.
+This release focuses on smoother gameplay and NoteSplit polish.
 
-Tracked section exports now include raw value-only counter files for OBS:
-- attempts.txt
-- fcs_past.txt
-- killed_the_run.txt
-
-Tracked section folders no longer export:
-- start_time.txt
-- tracked.txt
-
-summary.txt is still included and remains the formatted multi-line section summary.
+- Reduced hitching by idling export work when it is not needed and moving more save/export work off the gameplay path.
+- Improved desktop overlay and NoteSplit rendering so the overlay does less work during songs.
+- Fixed NoteSplit misses being credited to the wrong section at split boundaries.
+- Fixed NoteSplit mode toggles reverting when enabled from the menu or during a song.
+- Fixed NoteSplit large-font clipping in the header, footer, attempts block, and section rows.
+- Updated NoteSplit row backgrounds so they scale cleanly with larger row heights.
 
 For the safest install, use StatTrack on a clean Clone Hero copy instead of installing over an already modded folder.

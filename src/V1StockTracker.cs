@@ -149,10 +149,7 @@ public static class StockTrackerHooks
     {
         try
         {
-            lock (Sync)
-            {
-                Tracker.RenderOverlayGui();
-            }
+            Tracker.RenderOverlayGui();
         }
         catch (Exception ex)
         {
@@ -291,8 +288,8 @@ internal sealed class V1StockTracker
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.3";
-    private const string PublicVersionLabel = "StatTrack v1.0.3";
+    private const string PublicVersionNumber = "1.0.4";
+    private const string PublicVersionLabel = "StatTrack v1.0.4";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;
@@ -318,6 +315,8 @@ internal sealed class V1StockTracker
     private const string NoteWasHitFieldName = "Ê¿Ê¿Ê·Ê¾Ê¹Ê¼Ê¸Ê·Ë€Ê¼Ê´";
     private const string NoteDisjointPropertyName = "Ê¿Ê´Ê½Ë€ÊµÊ³Ê¸Ê¸Ê¸Ê»Ë€";
     private const string NoteSlavePropertyName = "ÊµË€Ê³Ë€Ê¶ÊµÊ¸Ê½Ê¶Ê´Ê´";
+    private const string NoteStartTimePropertyName = "\u02b2\u02b8\u02ba\u02ba\u02bc\u02b7\u02b5\u02b5\u02b6\u02b5\u02c1";
+    private const string NoteTickPropertyName = "\u02b5\u02bf\u02b5\u02b2\u02bd\u02bd\u02bd\u02b5\u02b8\u02c0\u02be";
 
     private string _dataDir = string.Empty;
     private string _statePath = string.Empty;
@@ -341,20 +340,32 @@ internal sealed class V1StockTracker
     private readonly object _updateCheckSync = new();
     private const string DesktopOverlayExeName = "StatTrackOverlay.exe";
     private const float DesktopOverlayCheckIntervalSeconds = 5f;
+    private const float DesktopOverlayStateExportGraceSeconds = 1f;
     private bool _memoryDirty;
     private bool _configDirty;
     private int _memoryVersion;
     private int _configVersion;
+    private int _sectionMemoryVersion;
+    private int _sectionConfigVersion;
+    private int _overlayConfigVersion;
+    private int _latestStateVersion;
+    private int _enabledTextExportsVersion;
     private bool _initialized;
     private SectionSnapshotCache? _sectionSnapshotCache;
+    private NoteSplitSnapshotCache? _noteSplitSnapshotCache;
     private string _completedRunsSnapshotSongKey = string.Empty;
     private int _completedRunsSnapshotMemoryVersion = -1;
     private List<CompletedRunRecord> _completedRunsSnapshot = new();
     private Thread? _exportThread;
     private ExportWorkItem? _pendingExport;
+    private bool _obsCleanupPending = true;
+    private float _lastDesktopOverlayNeededAt = -999f;
+    private bool _forceStateExportPending;
+    private bool _forceObsExportPending;
     private bool _updateCheckStarted;
     private bool _updateAvailable;
     private string? _latestReleaseVersionLabel;
+    private float _lastMenuPersistenceAt = -999f;
 
     private Type? _gameManagerType;
     private Type? _globalVariablesType;
@@ -443,6 +454,15 @@ internal sealed class V1StockTracker
     private Texture2D? _overlaySliderFillTexture;
     private Texture2D? _overlaySliderKnobTexture;
     private readonly Dictionary<string, Texture2D> _resizeCornerTextureCache = new();
+    private readonly EnabledTextExportSnapshot _disabledTextExportSnapshot = new();
+    private EnabledTextExportSnapshot _enabledTextExportSnapshot = new();
+    private int _enabledTextExportSnapshotVersion = -1;
+    private OverlayRenderSnapshot? _overlayRenderSnapshot;
+    private int _overlayRenderSnapshotStateVersion = -1;
+    private int _overlayRenderSnapshotConfigVersion = -1;
+    private int _overlayRenderSnapshotScreenWidth = -1;
+    private int _overlayRenderSnapshotScreenHeight = -1;
+    private bool _overlayRenderSnapshotEditorVisible;
     private string? _songResetConfirmKey;
     private float _songResetConfirmExpiresAt;
     private string? _overlayResetConfirmKey;
@@ -452,10 +472,26 @@ internal sealed class V1StockTracker
     private float _lastDesktopOverlayCheckAt = -999f;
     private bool _desktopOverlayLaunchFailed;
     private bool _practiceAttemptRollbackApplied;
+    private readonly object _persistenceWriteSync = new();
+    private readonly Dictionary<string, PersistenceWriteItem> _pendingPersistenceWrites = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AutoResetEvent _persistenceWriteSignal = new(false);
+    private Thread? _persistenceWriteThread;
+    private bool _persistenceWriteThreadStarted;
+    private TrackerMemory? _memoryWriteSnapshot;
+    private bool _memoryWriteSnapshotRequiresFullRefresh = true;
+    private readonly HashSet<string> _dirtyMemorySongKeys = new(StringComparer.Ordinal);
+    private TrackerConfig? _configWriteSnapshot;
+    private bool _configWriteSnapshotRequiresFullRefresh = true;
+    private readonly HashSet<string> _dirtyConfigSongKeys = new(StringComparer.Ordinal);
+    private DesktopOverlayStyleConfig _mergedDesktopOverlayStyle = new();
     private string? _lastMenuOverlayStateFailureMessage;
     private const float OverlayWidgetDefaultWidth = 300f;
     private const float OverlayWidgetDefaultHeight = 90f;
     private const int OverlayWidgetResizeModeVersion = 2;
+    private GUIStyle? _widgetTitleStyle;
+    private GUIStyle? _widgetContentStyle;
+    private GUIStyle? _widgetSectionAttemptsStyle;
+    private GUIStyle? _widgetSectionEmphasisStyle;
 
     public void Tick(object gameManager)
     {
@@ -466,12 +502,25 @@ internal sealed class V1StockTracker
 
         TrackerState state = BuildState(gameManager);
         _latestState = state;
+        _latestStateVersion++;
 
         if (!state.IsInSong && Time.unscaledTime - _lastConfigReloadAt >= 1.5f)
         {
             _lastConfigReloadAt = Time.unscaledTime;
-            _config = LoadJson(_configPath, _config);
-            _config.DesktopOverlayStyle = GetMergedDesktopOverlayStyle();
+            if (_configDirty)
+            {
+                SaveConfig();
+            }
+            else
+            {
+                _config = LoadJson(_configPath, _config);
+                RefreshMergedDesktopOverlayStyle();
+                _configWriteSnapshotRequiresFullRefresh = true;
+                _dirtyConfigSongKeys.Clear();
+                _overlayConfigVersion++;
+                _enabledTextExportsVersion++;
+                _enabledTextExportSnapshotVersion = -1;
+            }
         }
 
         if (ShouldUseDesktopOverlay(state) && (!state.IsInSong || _desktopOverlayProcess == null))
@@ -487,6 +536,7 @@ internal sealed class V1StockTracker
         EnsureInitialized(mainMenu.GetType().Assembly);
         _gameManagerType ??= mainMenu.GetType().Assembly.GetType("GameManager");
         CacheReflection();
+        FlushPendingMenuPersistence();
         EnsureReleaseCheckStarted();
         ApplyMainMenuVersionText(mainMenu);
     }
@@ -813,6 +863,8 @@ internal sealed class V1StockTracker
 
     public void HandleOverlayUpdate()
     {
+        FlushPendingMenuPersistence();
+
         if (_overlayEditorVisible && Input.GetKeyDown(KeyCode.Escape))
         {
             _overlayEditorVisible = false;
@@ -833,6 +885,19 @@ internal sealed class V1StockTracker
         }
     }
 
+    private void FlushPendingMenuPersistence()
+    {
+        if ((!_configDirty && !_memoryDirty) ||
+            Time.unscaledTime - _lastMenuPersistenceAt < 0.5f)
+        {
+            return;
+        }
+
+        _lastMenuPersistenceAt = Time.unscaledTime;
+        SaveConfig();
+        SaveMemory();
+    }
+
     public void RenderOverlayGui()
     {
         if (!_initialized)
@@ -846,25 +911,16 @@ internal sealed class V1StockTracker
             _overlayResizingKey = null;
         }
 
-        TrackerState state = _latestState ?? CreateIdleState();
-        if (!state.IsInSong && _overlayEditorVisible)
-        {
-            state = BuildMenuOverlayState();
-        }
-
-        if (!state.IsInSong && !_overlayEditorVisible)
+        OverlayRenderSnapshot snapshot = GetOrBuildOverlayRenderSnapshot();
+        if (!snapshot.ShouldRender)
         {
             return;
         }
 
-        SongConfig? songConfig = null;
-        if (state.Song != null)
+        Event? currentEvent = Event.current;
+        if (!ShouldProcessOverlayGuiEvent(snapshot, currentEvent?.type))
         {
-            _config.Songs.TryGetValue(state.Song.OverlayLayoutKey ?? state.Song.SongKey, out songConfig);
-            if (songConfig != null)
-            {
-                NormalizeSongOverlayWidgets(songConfig);
-            }
+            return;
         }
 
         if (_songResetConfirmKey != null && Time.unscaledTime > _songResetConfirmExpiresAt)
@@ -882,30 +938,132 @@ internal sealed class V1StockTracker
             _wipeAllDataConfirmExpiresAt = 0f;
         }
 
-        bool renderWidgetsInGame = state.IsInSong && (_overlayEditorVisible || !IsDesktopOverlayRunning());
-        if (renderWidgetsInGame && state.Song != null && songConfig != null)
+        if (snapshot.RenderWidgetsInGame && snapshot.WidgetEntries.Count > 0)
         {
-            RenderOverlayWidgets(state, songConfig);
+            RenderOverlayWidgets(snapshot);
         }
 
         if (_overlayEditorVisible)
         {
-            RenderOverlayEditor(state, songConfig);
+            RenderOverlayEditor(snapshot.State, snapshot.SongConfig);
         }
 
-        if (songConfig != null)
+        if (snapshot.SongConfig != null)
         {
-            RenderOverlayColorPicker(songConfig);
+            RenderOverlayColorPicker(snapshot.SongConfig);
         }
     }
 
     private TrackerState BuildMenuOverlayState()
     {
-        Dictionary<string, bool> defaultExports = GetEnabledTextExportsSnapshot();
+        EnabledTextExportSnapshot defaultExports = GetEnabledTextExportsSnapshot();
         TrackerState state = CreateIdleState();
         state.OverlayEditorVisible = _overlayEditorVisible;
         state.EnabledTextExports = defaultExports;
         return state;
+    }
+
+    private OverlayRenderSnapshot GetOrBuildOverlayRenderSnapshot()
+    {
+        TrackerState state = _latestState;
+        if (!state.IsInSong && _overlayEditorVisible)
+        {
+            state = BuildMenuOverlayState();
+        }
+
+        int screenWidth = Screen.width;
+        int screenHeight = Screen.height;
+        if (_overlayRenderSnapshot != null &&
+            _overlayRenderSnapshotStateVersion == _latestStateVersion &&
+            _overlayRenderSnapshotConfigVersion == _overlayConfigVersion &&
+            _overlayRenderSnapshotScreenWidth == screenWidth &&
+            _overlayRenderSnapshotScreenHeight == screenHeight &&
+            _overlayRenderSnapshotEditorVisible == _overlayEditorVisible)
+        {
+            return _overlayRenderSnapshot;
+        }
+
+        SongConfig? songConfig = state.Song == null ? null : TryGetSongConfig(state.Song);
+        var snapshot = new OverlayRenderSnapshot
+        {
+            State = state,
+            SongConfig = songConfig,
+            ShouldRender = state.IsInSong || _overlayEditorVisible,
+            OverlayEditorVisible = _overlayEditorVisible,
+            RenderWidgetsInGame = state.IsInSong && (_overlayEditorVisible || !IsDesktopOverlayRunning())
+        };
+
+        if (snapshot.RenderWidgetsInGame && songConfig != null)
+        {
+            snapshot.WidgetEntries = BuildOverlayWidgetEntries(state, songConfig);
+        }
+
+        _overlayRenderSnapshot = snapshot;
+        _overlayRenderSnapshotStateVersion = _latestStateVersion;
+        _overlayRenderSnapshotConfigVersion = _overlayConfigVersion;
+        _overlayRenderSnapshotScreenWidth = screenWidth;
+        _overlayRenderSnapshotScreenHeight = screenHeight;
+        _overlayRenderSnapshotEditorVisible = _overlayEditorVisible;
+        return snapshot;
+    }
+
+    private static bool ShouldProcessOverlayGuiEvent(OverlayRenderSnapshot snapshot, EventType? eventType)
+    {
+        if (eventType == null)
+        {
+            return false;
+        }
+
+        if (snapshot.OverlayEditorVisible)
+        {
+            return eventType == EventType.Layout ||
+                eventType == EventType.Repaint ||
+                eventType == EventType.MouseDown ||
+                eventType == EventType.MouseDrag ||
+                eventType == EventType.MouseUp ||
+                eventType == EventType.ScrollWheel;
+        }
+
+        if (snapshot.WidgetEntries.Count == 0)
+        {
+            return false;
+        }
+
+        return eventType == EventType.Repaint ||
+            eventType == EventType.MouseDown ||
+            eventType == EventType.MouseDrag ||
+            eventType == EventType.MouseUp;
+    }
+
+    private List<OverlayWidgetRenderEntry> BuildOverlayWidgetEntries(TrackerState state, SongConfig songConfig)
+    {
+        Dictionary<string, int> sectionOrder = BuildOverlaySectionOrder(state);
+        List<KeyValuePair<string, OverlayWidgetConfig>> widgets = songConfig.OverlayWidgets
+            .Where(pair => pair.Value != null && pair.Value.Enabled)
+            .ToList();
+        widgets.Sort((left, right) => CompareOverlayWidgetEntries(sectionOrder, left, right));
+
+        var entries = new List<OverlayWidgetRenderEntry>(widgets.Count);
+        for (int i = 0; i < widgets.Count; i++)
+        {
+            string widgetKey = widgets[i].Key;
+            OverlayWidgetConfig widgetConfig = widgets[i].Value;
+            if (!TryBuildOverlayWidget(state, widgetKey, out string title, out string content))
+            {
+                continue;
+            }
+
+            entries.Add(new OverlayWidgetRenderEntry
+            {
+                WidgetKey = widgetKey,
+                Config = widgetConfig,
+                Title = title,
+                Content = content,
+                DefaultIndex = i
+            });
+        }
+
+        return entries;
     }
 
     private void LogMenuOverlayStateFailure(Exception ex)
@@ -926,26 +1084,14 @@ internal sealed class V1StockTracker
         StockTrackerLog.Write("MenuOverlayStateFailure | " + message);
     }
 
-    private void RenderOverlayWidgets(TrackerState state, SongConfig songConfig)
+    private void RenderOverlayWidgets(OverlayRenderSnapshot snapshot)
     {
-        Dictionary<string, int> sectionOrder = BuildOverlaySectionOrder(state);
-        List<KeyValuePair<string, OverlayWidgetConfig>> widgets = songConfig.OverlayWidgets
-            .Where(pair => pair.Value != null && pair.Value.Enabled)
-            .ToList();
-        widgets.Sort((left, right) => CompareOverlayWidgetEntries(sectionOrder, left, right));
-
-        for (int i = 0; i < widgets.Count; i++)
+        for (int i = 0; i < snapshot.WidgetEntries.Count; i++)
         {
-            string widgetKey = widgets[i].Key;
-            OverlayWidgetConfig widgetConfig = widgets[i].Value;
-            if (!TryBuildOverlayWidget(state, widgetKey, out string title, out string content))
-            {
-                continue;
-            }
-
-            Rect rect = GetWidgetRect(widgetConfig, i);
-            Rect updated = RenderOverlayWidgetPanel("widget:" + widgetKey, widgetConfig, rect, title, content);
-            PersistWidgetRect(widgetConfig, updated);
+            OverlayWidgetRenderEntry widget = snapshot.WidgetEntries[i];
+            Rect rect = GetWidgetRect(widget.Config, widget.DefaultIndex);
+            Rect updated = RenderOverlayWidgetPanel("widget:" + widget.WidgetKey, widget.Config, rect, widget.Title, widget.Content);
+            PersistWidgetRect(widget.Config, updated);
         }
     }
 
@@ -963,7 +1109,7 @@ internal sealed class V1StockTracker
             }
 
             overlayConfig.ResizeHandleHidden = !visible;
-            MarkConfigDirty();
+            MarkConfigDirty(affectsGlobalSnapshot: true);
         }, contentRect =>
         {
             GUILayout.BeginArea(contentRect);
@@ -1016,7 +1162,8 @@ internal sealed class V1StockTracker
                     if (updatedEnabled != enabled)
                     {
                         defaultEnabledTextExports[exportDefinition.Key] = updatedEnabled;
-                        MarkConfigDirty();
+                        MarkConfigDirty(affectsTextExports: true, affectsGlobalSnapshot: true);
+                        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
                     }
                 }
 
@@ -1063,7 +1210,8 @@ internal sealed class V1StockTracker
                     if (updatedEnabled != enabled)
                     {
                         defaultEnabledTextExports[exportDefinition.Key] = updatedEnabled;
-                        MarkConfigDirty();
+                        MarkConfigDirty(affectsTextExports: true, affectsGlobalSnapshot: true);
+                        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
                     }
                 }
 
@@ -1092,7 +1240,8 @@ internal sealed class V1StockTracker
                         if (updatedTracked != tracked)
                         {
                             songConfig.TrackedSections[sectionOverlayKey] = updatedTracked;
-                            MarkConfigDirty();
+                            MarkConfigDirty(affectsSectionSnapshots: true);
+                            RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
                         }
                     }
 
@@ -1109,6 +1258,7 @@ internal sealed class V1StockTracker
                     {
                         SetWidgetEnabled(songConfig, BuildSectionWidgetKey(sectionOverlayKey), updatedEnabled);
                         MarkConfigDirty();
+                        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: false);
                     }
                 }
 
@@ -1122,6 +1272,7 @@ internal sealed class V1StockTracker
                     {
                         SetWidgetEnabled(songConfig, BuildMetricWidgetKey(metric.Key), updatedEnabled);
                         MarkConfigDirty();
+                        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: false);
                     }
                 }
 
@@ -1215,7 +1366,7 @@ internal sealed class V1StockTracker
         if (Math.Abs(updatedAlpha - alpha) >= 0.001f)
         {
             overlayConfig.BackgroundA = updatedAlpha;
-            MarkConfigDirty();
+            MarkConfigDirty(affectsGlobalSnapshot: true);
         }
 
         GUILayout.Label($"Background Opacity: {Mathf.RoundToInt(Mathf.Clamp01(overlayConfig.BackgroundA) * 100f)}%", GUILayout.Width(width));
@@ -1894,8 +2045,13 @@ internal sealed class V1StockTracker
         return _config.DefaultEnabledTextExports;
     }
 
-    private Dictionary<string, bool> GetEnabledTextExportsSnapshot()
+    private EnabledTextExportSnapshot GetEnabledTextExportsSnapshot()
     {
+        if (_enabledTextExportSnapshotVersion == _enabledTextExportsVersion)
+        {
+            return _enabledTextExportSnapshot;
+        }
+
         Dictionary<string, bool> rawExports = EnsureDefaultEnabledTextExports();
         Dictionary<string, bool> snapshot = new(StringComparer.Ordinal);
         foreach (TextExportDefinition exportDefinition in TextExportDefinition.All)
@@ -1903,7 +2059,9 @@ internal sealed class V1StockTracker
             snapshot[exportDefinition.Key] = rawExports.TryGetValue(exportDefinition.Key, out bool enabled) && enabled;
         }
 
-        return snapshot;
+        _enabledTextExportSnapshot = new EnabledTextExportSnapshot(snapshot);
+        _enabledTextExportSnapshotVersion = _enabledTextExportsVersion;
+        return _enabledTextExportSnapshot;
     }
 
     private static Rect GetEditorRect(OverlayEditorConfig config)
@@ -1930,7 +2088,7 @@ internal sealed class V1StockTracker
         config.Y = rect.y;
         config.Width = rect.width;
         config.Height = rect.height;
-        MarkConfigDirty();
+        MarkConfigDirty(affectsGlobalSnapshot: true);
     }
 
     private static Rect GetWidgetRect(OverlayWidgetConfig config, int defaultIndex)
@@ -1960,7 +2118,7 @@ internal sealed class V1StockTracker
         MarkConfigDirty();
     }
 
-    private void NormalizeSongOverlayWidgets(SongConfig songConfig)
+    private void NormalizeSongOverlayWidgets(SongConfig songConfig, string? songKey = null)
     {
         bool changed = false;
         foreach (OverlayWidgetConfig? widget in songConfig.OverlayWidgets.Values)
@@ -1973,7 +2131,7 @@ internal sealed class V1StockTracker
 
         if (changed)
         {
-            MarkConfigDirty();
+            MarkConfigDirty(songKey: songKey);
         }
     }
 
@@ -2180,6 +2338,9 @@ internal sealed class V1StockTracker
             _config.DesktopOverlayStyle.BorderR = color.r;
             _config.DesktopOverlayStyle.BorderG = color.g;
             _config.DesktopOverlayStyle.BorderB = color.b;
+            _mergedDesktopOverlayStyle.BorderR = color.r;
+            _mergedDesktopOverlayStyle.BorderG = color.g;
+            _mergedDesktopOverlayStyle.BorderB = color.b;
             SaveDesktopOverlayStyle();
         }
         else if (config != null)
@@ -2188,13 +2349,13 @@ internal sealed class V1StockTracker
             config.BackgroundG = color.g;
             config.BackgroundB = color.b;
         }
-        MarkConfigDirty();
+        MarkConfigDirty(affectsGlobalSnapshot: editingDesktopBorder);
         _overlayColorWheelTextureValue = -1f;
     }
 
     private Color GetDesktopBorderColor()
     {
-        DesktopOverlayStyleConfig style = _config.DesktopOverlayStyle ?? new DesktopOverlayStyleConfig();
+        DesktopOverlayStyleConfig style = _mergedDesktopOverlayStyle ?? new DesktopOverlayStyleConfig();
         return new Color(
             Mathf.Clamp01(style.BorderR),
             Mathf.Clamp01(style.BorderG),
@@ -2260,7 +2421,15 @@ internal sealed class V1StockTracker
 
     private static void GetOverlayWidgetFontSizes(Rect rect, bool isSectionWidget, string content, out int titleFontSize, out int contentFontSize)
     {
-        int lineCount = Math.Max(1, content.Split('\n').Length);
+        int lineCount = 1;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                lineCount++;
+            }
+        }
+
         float baseTitleSize = isSectionWidget ? 17f : 15f;
         float baseContentSize = isSectionWidget ? 17f : (lineCount > 1 ? 16f : 18f);
         float maxTitleSize = Mathf.Max(13f, Mathf.Min(24f, (rect.height - 12f) * 0.34f));
@@ -2270,50 +2439,48 @@ internal sealed class V1StockTracker
         contentFontSize = Mathf.Clamp(Mathf.RoundToInt(Mathf.Min(baseContentSize, maxContentSize)), 11, 34);
     }
 
-    private static GUIStyle BuildWidgetTitleStyle(Rect rect, bool isSectionWidget, Color textColor)
+    private GUIStyle BuildWidgetTitleStyle(Rect rect, bool isSectionWidget, Color textColor)
     {
         GetOverlayWidgetFontSizes(rect, isSectionWidget, string.Empty, out int titleFontSize, out _);
-        var style = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontStyle = FontStyle.Bold,
-            fontSize = titleFontSize
-        };
+        _widgetTitleStyle ??= new GUIStyle(GUI.skin.label);
+        GUIStyle style = _widgetTitleStyle;
+        style.alignment = TextAnchor.MiddleLeft;
+        style.fontStyle = FontStyle.Bold;
+        style.fontSize = titleFontSize;
         style.normal.textColor = textColor;
         return style;
     }
 
-    private static GUIStyle BuildWidgetContentStyle(Rect rect, bool isSectionWidget, string content, Color textColor)
+    private GUIStyle BuildWidgetContentStyle(Rect rect, bool isSectionWidget, string content, Color textColor)
     {
         GetOverlayWidgetFontSizes(rect, isSectionWidget, content, out _, out int contentFontSize);
-        var style = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperLeft,
-            fontSize = contentFontSize
-        };
+        _widgetContentStyle ??= new GUIStyle(GUI.skin.label);
+        GUIStyle style = _widgetContentStyle;
+        style.alignment = TextAnchor.UpperLeft;
+        style.fontStyle = FontStyle.Normal;
+        style.fontSize = contentFontSize;
         style.normal.textColor = textColor;
         return style;
     }
 
-    private static void RenderSectionWidgetContent(Rect contentRect, string content, Color textColor)
+    private void RenderSectionWidgetContent(Rect contentRect, string content, Color textColor)
     {
         string[] lines = content.Split('\n');
         string attemptsLine = lines.Length >= 1 ? lines[0] : string.Empty;
         string emphasisLine = lines.Length >= 2 ? lines[1] : string.Empty;
 
-        GUIStyle attemptsStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperLeft,
-            fontSize = 14
-        };
+        _widgetSectionAttemptsStyle ??= new GUIStyle(GUI.skin.label);
+        GUIStyle attemptsStyle = _widgetSectionAttemptsStyle;
+        attemptsStyle.alignment = TextAnchor.UpperLeft;
+        attemptsStyle.fontStyle = FontStyle.Normal;
+        attemptsStyle.fontSize = 14;
         attemptsStyle.normal.textColor = textColor;
 
-        GUIStyle emphasisStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperLeft,
-            fontStyle = FontStyle.Bold,
-            fontSize = 17
-        };
+        _widgetSectionEmphasisStyle ??= new GUIStyle(GUI.skin.label);
+        GUIStyle emphasisStyle = _widgetSectionEmphasisStyle;
+        emphasisStyle.alignment = TextAnchor.UpperLeft;
+        emphasisStyle.fontStyle = FontStyle.Bold;
+        emphasisStyle.fontSize = 17;
         emphasisStyle.normal.textColor = textColor;
 
         float attemptsHeight = Mathf.Max(18f, attemptsStyle.CalcHeight(new GUIContent(attemptsLine), contentRect.width));
@@ -2547,9 +2714,9 @@ internal sealed class V1StockTracker
         return songConfig.OverlayWidgets.TryGetValue(widgetKey, out OverlayWidgetConfig? widget) && widget.Enabled;
     }
 
-    private static bool IsTextExportEnabled(IReadOnlyDictionary<string, bool> enabledTextExports, string exportKey)
+    private static bool IsTextExportEnabled(EnabledTextExportSnapshot enabledTextExports, string exportKey)
     {
-        return enabledTextExports.TryGetValue(exportKey, out bool enabled) && enabled;
+        return enabledTextExports.IsEnabled(exportKey);
     }
 
     private static bool IsTextExportEnabled(TrackerState state, string exportKey)
@@ -2559,9 +2726,7 @@ internal sealed class V1StockTracker
 
     private static bool HasAnyTextExportEnabled(TrackerState state)
     {
-        return TextExportDefinition.All.Any(exportDefinition =>
-            !string.Equals(exportDefinition.Key, NoteSplitModeExportKey, StringComparison.Ordinal) &&
-            IsTextExportEnabled(state, exportDefinition.Key)) ||
+        return state.EnabledTextExports.HasAnyObsTextExport ||
             state.SectionStats.Any(section => section.Tracked);
     }
 
@@ -2578,7 +2743,8 @@ internal sealed class V1StockTracker
         }
 
         enabledTextExports.Clear();
-        MarkConfigDirty();
+        MarkConfigDirty(affectsTextExports: true, affectsGlobalSnapshot: true);
+        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
     }
 
     private void SetWidgetEnabled(SongConfig songConfig, string widgetKey, bool enabled)
@@ -2764,7 +2930,7 @@ internal sealed class V1StockTracker
         EnsureExportWorkerStarted();
         _memory = LoadJson(_memoryPath, new TrackerMemory());
         _config = LoadJson(_configPath, new TrackerConfig());
-        _config.DesktopOverlayStyle = GetMergedDesktopOverlayStyle();
+        RefreshMergedDesktopOverlayStyle();
         _memoryDirty = !File.Exists(_memoryPath);
         _configDirty = !File.Exists(_configPath);
         _latestState = CreateIdleState();
@@ -2855,7 +3021,7 @@ internal sealed class V1StockTracker
 
     private TrackingRequirements BuildTrackingRequirements(SongConfig songConfig)
     {
-        Dictionary<string, bool> enabledTextExports = GetEnabledTextExportsSnapshot();
+        EnabledTextExportSnapshot enabledTextExports = GetEnabledTextExportsSnapshot();
         bool needSectionWidgets = songConfig.OverlayWidgets.Any(pair =>
             pair.Value != null &&
             pair.Value.Enabled &&
@@ -3182,9 +3348,15 @@ internal sealed class V1StockTracker
             }
         }
 
-        List<SectionDescriptor> sections = requirements.NeedSections || requirements.NeedRunTracking || requirements.NeedCompletedRunTracking
-            ? BuildSections(chart, songEntry, song.SongKey, song.SongSpeedPercent, songDuration)
-            : new List<SectionDescriptor>();
+        List<SectionDescriptor> sections;
+        if (requirements.NeedSections || requirements.NeedRunTracking || requirements.NeedCompletedRunTracking)
+        {
+            sections = BuildSections(chart, songEntry, song.SongKey, song.SongSpeedPercent, songDuration);
+        }
+        else
+        {
+            sections = new List<SectionDescriptor>();
+        }
         if (sections.Count > 0)
         {
             songConfig = EnsureSongConfig(song, sections);
@@ -3231,14 +3403,20 @@ internal sealed class V1StockTracker
         List<TrackedSectionState> trackedSections = sectionSnapshot.TrackedSections;
         List<SectionStatsState> sectionStats = sectionSnapshot.SectionStats;
         Dictionary<string, SectionStatsState> sectionStatsByName = sectionSnapshot.SectionStatsByName;
-        Dictionary<string, bool> enabledTextExports = GetEnabledTextExportsSnapshot();
+        EnabledTextExportSnapshot enabledTextExports = GetEnabledTextExportsSnapshot();
         bool noteSplitEnabled = IsTextExportEnabled(enabledTextExports, NoteSplitModeExportKey);
         SectionStatsState? currentSectionStats = string.IsNullOrWhiteSpace(currentSectionName)
             ? null
             : (sectionStatsByName.TryGetValue(currentSectionName, out SectionStatsState? currentStats) ? currentStats : null);
-        List<NoteSplitSectionState> noteSplitSections = noteSplitEnabled
-            ? BuildNoteSplitSections(sections, songMemory, currentSectionName)
-            : new List<NoteSplitSectionState>();
+        List<NoteSplitSectionState> noteSplitSections;
+        if (noteSplitEnabled)
+        {
+            noteSplitSections = GetOrBuildNoteSplitSections(song.SongKey, sections, songMemory, currentSectionName);
+        }
+        else
+        {
+            noteSplitSections = new List<NoteSplitSectionState>();
+        }
         GetSongPersonalBestRun(songMemory, out int? songPersonalBestMissCount, out int? songPersonalBestOverstrums);
 
         return new TrackerState
@@ -3378,7 +3556,7 @@ internal sealed class V1StockTracker
         }
 
         FindOrCreateExactMissCounter(player).MissedNotes++;
-        RecordNoteSplitExactMiss();
+        RecordNoteSplitExactMiss(note);
     }
 
     private int ReadExactMissedNotesCount(object player)
@@ -3428,14 +3606,14 @@ internal sealed class V1StockTracker
         return created;
     }
 
-    private void RecordNoteSplitExactMiss()
+    private void RecordNoteSplitExactMiss(object note)
     {
         if (!_runState.InRun)
         {
             return;
         }
 
-        if (!TryResolveCurrentSectionNameForNoteSplitEvent(out string sectionName))
+        if (!TryResolveSectionNameForNoteSplitEvent(note, out string sectionName))
         {
             _runState.PendingNoteSplitMisses++;
             return;
@@ -3445,14 +3623,34 @@ internal sealed class V1StockTracker
         AddNoteSplitMissToSection(sectionName, 1);
     }
 
-    private bool TryResolveCurrentSectionNameForNoteSplitEvent(out string sectionName)
+    private bool TryResolveSectionNameForNoteSplitEvent(object? note, out string sectionName)
     {
         sectionName = string.Empty;
+        if (!TryGetNoteSplitSectionsForEvent(out IReadOnlyList<SectionDescriptor> sections))
+        {
+            return false;
+        }
+
+        if (TryResolveSectionNameForNoteSplitEventFromNote(note, sections, out sectionName))
+        {
+            return true;
+        }
+
         if (_activeGameManager == null)
         {
             return false;
         }
 
+        double rawSongTime = ConvertToDouble(_songTimeField?.GetValue(_activeGameManager));
+        double songTime = ReadCurrentSectionSongTime(_activeGameManager, rawSongTime);
+        int currentChartTick = ReadCurrentChartTick(_activeGameManager);
+        sectionName = GetCurrentSectionName(sections, songTime, currentChartTick);
+        return !string.IsNullOrWhiteSpace(sectionName);
+    }
+
+    private bool TryGetNoteSplitSectionsForEvent(out IReadOnlyList<SectionDescriptor> sections)
+    {
+        sections = Array.Empty<SectionDescriptor>();
         string songKey =
             _runState.CachedSongDescriptor?.SongKey ??
             _latestState.Song?.SongKey ??
@@ -3462,7 +3660,6 @@ internal sealed class V1StockTracker
             return false;
         }
 
-        List<SectionDescriptor>? sections = null;
         if (_songSectionsCache.TryGetValue(songKey, out List<SectionDescriptor>? cachedSections) &&
             cachedSections != null &&
             cachedSections.Count > 0)
@@ -3479,10 +3676,26 @@ internal sealed class V1StockTracker
             return false;
         }
 
-        double rawSongTime = ConvertToDouble(_songTimeField?.GetValue(_activeGameManager));
-        double songTime = ReadCurrentSectionSongTime(_activeGameManager, rawSongTime);
-        int currentChartTick = ReadCurrentChartTick(_activeGameManager);
-        sectionName = GetCurrentSectionName(sections, songTime, currentChartTick);
+        return true;
+    }
+
+    private bool TryResolveSectionNameForNoteSplitEventFromNote(object? note, IReadOnlyList<SectionDescriptor> sections, out string sectionName)
+    {
+        sectionName = string.Empty;
+        if (note == null)
+        {
+            return false;
+        }
+
+        int noteTick = TryReadInt32Member(note, NoteTickPropertyName) ?? -1;
+        double noteSongTime = TryReadDoubleMember(note, NoteStartTimePropertyName) ?? -1d;
+        if (noteTick < 0 &&
+            (double.IsNaN(noteSongTime) || double.IsInfinity(noteSongTime) || noteSongTime < 0d))
+        {
+            return false;
+        }
+
+        sectionName = GetCurrentSectionName(sections, noteSongTime, noteTick);
         return !string.IsNullOrWhiteSpace(sectionName);
     }
 
@@ -3639,6 +3852,42 @@ internal sealed class V1StockTracker
         }
 
         return false;
+    }
+
+    private static int? TryReadInt32Member(object obj, string encodedName, string? fallbackName = null)
+    {
+        string[] names = string.IsNullOrEmpty(fallbackName) ? new[] { encodedName } : new[] { encodedName, fallbackName! };
+        FieldInfo? field = FindField(obj.GetType(), names);
+        if (field != null)
+        {
+            return ConvertToInt32(field.GetValue(obj));
+        }
+
+        PropertyInfo? property = FindProperty(obj.GetType(), names);
+        if (property != null)
+        {
+            return ConvertToInt32(SafeGetPropertyValue(property, obj));
+        }
+
+        return null;
+    }
+
+    private static double? TryReadDoubleMember(object obj, string encodedName, string? fallbackName = null)
+    {
+        string[] names = string.IsNullOrEmpty(fallbackName) ? new[] { encodedName } : new[] { encodedName, fallbackName! };
+        FieldInfo? field = FindField(obj.GetType(), names);
+        if (field != null)
+        {
+            return ConvertToDouble(field.GetValue(obj));
+        }
+
+        PropertyInfo? property = FindProperty(obj.GetType(), names);
+        if (property != null)
+        {
+            return ConvertToDouble(SafeGetPropertyValue(property, obj));
+        }
+
+        return null;
     }
 
     private static FieldInfo? FindField(Type type, params string[] names)
@@ -4048,16 +4297,89 @@ internal sealed class V1StockTracker
         }
     }
 
-    private void MarkMemoryDirty()
+    private void MarkMemoryDirty(string? songKey = null, bool affectsSectionSnapshots = true)
     {
         _memoryDirty = true;
         _memoryVersion++;
+        if (affectsSectionSnapshots)
+        {
+            _sectionMemoryVersion++;
+        }
+
+        string? dirtySongKey = ResolveDirtyMemorySongKey(songKey);
+        if (string.IsNullOrWhiteSpace(dirtySongKey))
+        {
+            _memoryWriteSnapshotRequiresFullRefresh = true;
+            return;
+        }
+
+        _dirtyMemorySongKeys.Add(dirtySongKey!);
     }
 
-    private void MarkConfigDirty()
+    private void MarkConfigDirty(string? songKey = null, bool affectsSectionSnapshots = false, bool affectsTextExports = false, bool affectsGlobalSnapshot = false)
     {
         _configDirty = true;
         _configVersion++;
+        _overlayConfigVersion++;
+        if (affectsSectionSnapshots)
+        {
+            _sectionConfigVersion++;
+        }
+
+        if (affectsTextExports)
+        {
+            _enabledTextExportsVersion++;
+            _enabledTextExportSnapshotVersion = -1;
+        }
+
+        string? configKey = songKey ?? TryGetActiveSongConfigKey();
+        if (affectsGlobalSnapshot || string.IsNullOrWhiteSpace(configKey))
+        {
+            _configWriteSnapshotRequiresFullRefresh = true;
+            return;
+        }
+
+        _dirtyConfigSongKeys.Add(configKey!);
+    }
+
+    private string? ResolveDirtyMemorySongKey(string? songKey = null)
+    {
+        if (!string.IsNullOrWhiteSpace(songKey))
+        {
+            return songKey;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_runState.CachedSongMemoryKey))
+        {
+            return _runState.CachedSongMemoryKey;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_runState.SongKey))
+        {
+            return _runState.SongKey;
+        }
+
+        return null;
+    }
+
+    private string? TryGetActiveSongConfigKey()
+    {
+        if (_latestState?.Song != null)
+        {
+            return _latestState.Song.OverlayLayoutKey ?? _latestState.Song.SongKey;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_runState.CachedSongConfigKey))
+        {
+            return _runState.CachedSongConfigKey;
+        }
+
+        if (_runState.CachedSongDescriptor != null)
+        {
+            return _runState.CachedSongDescriptor.OverlayLayoutKey ?? _runState.CachedSongDescriptor.SongKey;
+        }
+
+        return null;
     }
 
     private DifficultyInfo ReadDifficultyInfo(object? player)
@@ -5485,8 +5807,8 @@ internal sealed class V1StockTracker
     {
         if (_sectionSnapshotCache != null &&
             string.Equals(_sectionSnapshotCache.SongKey, songKey, StringComparison.Ordinal) &&
-            _sectionSnapshotCache.MemoryVersion == _memoryVersion &&
-            _sectionSnapshotCache.ConfigVersion == _configVersion &&
+            _sectionSnapshotCache.MemoryVersion == _sectionMemoryVersion &&
+            _sectionSnapshotCache.ConfigVersion == _sectionConfigVersion &&
             _sectionSnapshotCache.SectionCount == sections.Count)
         {
             return _sectionSnapshotCache;
@@ -5497,8 +5819,8 @@ internal sealed class V1StockTracker
         _sectionSnapshotCache = new SectionSnapshotCache
         {
             SongKey = songKey,
-            MemoryVersion = _memoryVersion,
-            ConfigVersion = _configVersion,
+            MemoryVersion = _sectionMemoryVersion,
+            ConfigVersion = _sectionConfigVersion,
             SectionCount = sections.Count,
             TrackedSections = trackedSections,
             SectionStats = sectionStats,
@@ -6142,35 +6464,40 @@ internal sealed class V1StockTracker
         {
             songMemory = new SongMemory();
             _memory.Songs[song.SongKey] = songMemory;
-            MarkMemoryDirty();
+            MarkMemoryDirty(song.SongKey);
         }
 
         if (!string.Equals(songMemory.Title, song.Title, StringComparison.Ordinal))
         {
             songMemory.Title = song.Title;
-            MarkMemoryDirty();
+            MarkMemoryDirty(song.SongKey);
         }
         if (!string.Equals(songMemory.Artist, song.Artist, StringComparison.Ordinal))
         {
             songMemory.Artist = song.Artist;
-            MarkMemoryDirty();
+            MarkMemoryDirty(song.SongKey);
         }
         if (!string.Equals(songMemory.Charter, song.Charter, StringComparison.Ordinal))
         {
             songMemory.Charter = song.Charter;
-            MarkMemoryDirty();
+            MarkMemoryDirty(song.SongKey);
         }
 
         foreach (SectionDescriptor section in sectionList)
         {
             string sectionKey = BuildSectionOverlayKey(sectionList, section);
-            EnsureSectionMemory(songMemory, sectionKey);
+            EnsureSectionMemory(songMemory, sectionKey, song.SongKey);
         }
 
         return songMemory;
     }
 
     private SectionMemory EnsureSectionMemory(SongMemory songMemory, string sectionKey)
+    {
+        return EnsureSectionMemory(songMemory, sectionKey, ResolveDirtyMemorySongKey() ?? string.Empty);
+    }
+
+    private SectionMemory EnsureSectionMemory(SongMemory songMemory, string sectionKey, string songKey)
     {
         if (songMemory.Sections.TryGetValue(sectionKey, out SectionMemory? sectionMemory))
         {
@@ -6179,7 +6506,7 @@ internal sealed class V1StockTracker
 
         sectionMemory = new SectionMemory();
         songMemory.Sections[sectionKey] = sectionMemory;
-        MarkMemoryDirty();
+        MarkMemoryDirty(songKey);
         return sectionMemory;
     }
 
@@ -6191,23 +6518,23 @@ internal sealed class V1StockTracker
         {
             songConfig = new SongConfig();
             _config.Songs[configKey] = songConfig;
-            MarkConfigDirty();
+            MarkConfigDirty(songKey: configKey);
         }
 
         if (!string.Equals(songConfig.Title, song.Title, StringComparison.Ordinal))
         {
             songConfig.Title = song.Title;
-            MarkConfigDirty();
+            MarkConfigDirty(songKey: configKey);
         }
         if (!string.Equals(songConfig.Artist, song.Artist, StringComparison.Ordinal))
         {
             songConfig.Artist = song.Artist;
-            MarkConfigDirty();
+            MarkConfigDirty(songKey: configKey);
         }
         if (!string.Equals(songConfig.Charter, song.Charter, StringComparison.Ordinal))
         {
             songConfig.Charter = song.Charter;
-            MarkConfigDirty();
+            MarkConfigDirty(songKey: configKey);
         }
 
         foreach (SectionDescriptor section in sectionList)
@@ -6216,10 +6543,11 @@ internal sealed class V1StockTracker
             if (!songConfig.TrackedSections.ContainsKey(sectionKey))
             {
                 songConfig.TrackedSections[sectionKey] = false;
-                MarkConfigDirty();
+                MarkConfigDirty(songKey: configKey, affectsSectionSnapshots: true);
             }
         }
 
+        NormalizeSongOverlayWidgets(songConfig, configKey);
         return songConfig;
     }
 
@@ -6229,7 +6557,8 @@ internal sealed class V1StockTracker
         songConfig.OverlayWidgets.Clear();
         _overlayColorTargetKey = null;
         _sectionSnapshotCache = null;
-        MarkConfigDirty();
+        MarkConfigDirty(affectsSectionSnapshots: true);
+        RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
     }
 
     private void ResetSongStats(TrackerState state)
@@ -6299,9 +6628,14 @@ internal sealed class V1StockTracker
 
         _memory = new TrackerMemory();
         _config = new TrackerConfig();
+        _mergedDesktopOverlayStyle = CloneDesktopOverlayStyle(_config.DesktopOverlayStyle);
+        _config.DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle);
         _runState = new RunState();
         _latestState = CreateIdleState();
+        _latestStateVersion++;
         _sectionSnapshotCache = null;
+        _noteSplitSnapshotCache = null;
+        _overlayRenderSnapshot = null;
         _songSectionsCache.Clear();
         _songSectionNamesCache.Clear();
         _completedRunsSnapshotSongKey = string.Empty;
@@ -6316,6 +6650,17 @@ internal sealed class V1StockTracker
         _wipeAllDataConfirmExpiresAt = 0f;
         _memoryVersion++;
         _configVersion++;
+        _sectionMemoryVersion++;
+        _sectionConfigVersion++;
+        _overlayConfigVersion++;
+        _enabledTextExportsVersion++;
+        _enabledTextExportSnapshotVersion = -1;
+        _memoryWriteSnapshot = null;
+        _memoryWriteSnapshotRequiresFullRefresh = true;
+        _dirtyMemorySongKeys.Clear();
+        _configWriteSnapshot = null;
+        _configWriteSnapshotRequiresFullRefresh = true;
+        _dirtyConfigSongKeys.Clear();
 
         lock (_exportWorkerSync)
         {
@@ -6325,6 +6670,11 @@ internal sealed class V1StockTracker
         lock (_fileWriteSync)
         {
             _fileWriteCache.Clear();
+        }
+
+        lock (_persistenceWriteSync)
+        {
+            _pendingPersistenceWrites.Clear();
         }
 
         DeleteIfExists(_statePath);
@@ -6608,7 +6958,7 @@ internal sealed class V1StockTracker
             return;
         }
 
-        ApplyPendingNoteSplitMisses(currentSectionName);
+        ApplyPendingNoteSplitMisses(_runState.NoteSplitCurrentSection);
         CommitNoteSplitSection(songMemory, _runState.NoteSplitCurrentSection, updateFooterSnapshot: true);
         _runState.NoteSplitCurrentSection = currentSectionName;
     }
@@ -6856,7 +7206,8 @@ internal sealed class V1StockTracker
         return new TrackerState
         {
             IsInSong = false,
-            OverlayEditorVisible = _overlayEditorVisible
+            OverlayEditorVisible = _overlayEditorVisible,
+            EnabledTextExports = _disabledTextExportSnapshot
         };
     }
 
@@ -6986,18 +7337,28 @@ internal sealed class V1StockTracker
 
     private void ExportState(TrackerState state)
     {
+        bool shouldExportStateJson = ShouldExportStateJson(state);
+        bool shouldExportObs = ShouldExportObs(state);
+        bool forceStateExport = _forceStateExportPending;
+        bool forceObsExport = _forceObsExportPending;
         bool exportStateJson = false;
         bool exportObs = false;
-        if (Time.unscaledTime - _lastStateExportAt >= StateExportIntervalSeconds)
+        if (forceStateExport ||
+            (shouldExportStateJson &&
+            Time.unscaledTime - _lastStateExportAt >= StateExportIntervalSeconds))
         {
             _lastStateExportAt = Time.unscaledTime;
             exportStateJson = true;
+            _forceStateExportPending = false;
         }
 
-        if (Time.unscaledTime - _lastObsExportAt >= ObsExportIntervalSeconds)
+        if (forceObsExport ||
+            (shouldExportObs &&
+            Time.unscaledTime - _lastObsExportAt >= ObsExportIntervalSeconds))
         {
             _lastObsExportAt = Time.unscaledTime;
             exportObs = true;
+            _forceObsExportPending = false;
         }
 
         if (!exportStateJson && !exportObs)
@@ -7024,7 +7385,49 @@ internal sealed class V1StockTracker
         _exportSignal.Set();
     }
 
-    private void ExportObsState(TrackerState state, string stateJson)
+    private void RequestImmediateExportRefresh(bool includeStateExport, bool includeObsExport)
+    {
+        if (includeStateExport)
+        {
+            _forceStateExportPending = true;
+        }
+
+        if (includeObsExport)
+        {
+            _forceObsExportPending = true;
+            _obsCleanupPending = true;
+        }
+    }
+
+    private bool ShouldExportStateJson(TrackerState state)
+    {
+        if (ShouldUseDesktopOverlay(state))
+        {
+            _lastDesktopOverlayNeededAt = Time.unscaledTime;
+            return true;
+        }
+
+        return Time.unscaledTime - _lastDesktopOverlayNeededAt < DesktopOverlayStateExportGraceSeconds;
+    }
+
+    private bool ShouldExportObs(TrackerState state)
+    {
+        if (HasAnyTextExportEnabled(state))
+        {
+            _obsCleanupPending = true;
+            return true;
+        }
+
+        if (_obsCleanupPending)
+        {
+            _obsCleanupPending = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ExportObsState(TrackerState state, string? stateJson)
     {
         if (!HasAnyTextExportEnabled(state))
         {
@@ -7038,6 +7441,7 @@ internal sealed class V1StockTracker
             return;
         }
 
+        stateJson ??= JsonConvert.SerializeObject(state);
         WriteTextFileCached(_obsStatePath, stateJson);
 
         string currentDir = Path.Combine(_obsDir, "current");
@@ -7168,9 +7572,10 @@ internal sealed class V1StockTracker
                         break;
                     }
 
-                    string stateJson = JsonConvert.SerializeObject(workItem.State);
+                    string? stateJson = null;
                     if (workItem.ExportStateJson)
                     {
+                        stateJson = JsonConvert.SerializeObject(workItem.State);
                         WriteTextFileCached(_statePath, stateJson);
                     }
 
@@ -7194,7 +7599,7 @@ internal sealed class V1StockTracker
             return;
         }
 
-        WriteTextFileCached(_memoryPath, JsonConvert.SerializeObject(_memory));
+        QueuePersistenceWrite(_memoryPath, BuildMemoryWriteSnapshot());
         _memoryDirty = false;
     }
 
@@ -7206,29 +7611,110 @@ internal sealed class V1StockTracker
         }
 
         _config.DesktopOverlayStyle = SaveDesktopOverlayStyle();
-        WriteTextFileCached(_configPath, JsonConvert.SerializeObject(_config));
+        QueuePersistenceWrite(_configPath, BuildConfigWriteSnapshot());
         _configDirty = false;
     }
 
     private DesktopOverlayStyleConfig SaveDesktopOverlayStyle()
     {
         DesktopOverlayStyleConfig style = GetMergedDesktopOverlayStyle();
-        _config.DesktopOverlayStyle = style;
+        _config.DesktopOverlayStyle = CloneDesktopOverlayStyle(style);
         if (string.IsNullOrWhiteSpace(_desktopStylePath))
         {
             return style;
         }
 
-        WriteTextFileCached(_desktopStylePath, JsonConvert.SerializeObject(style));
+        QueuePersistenceWrite(_desktopStylePath, CloneDesktopOverlayStyle(style));
         return style;
     }
 
-    private DesktopOverlayStyleConfig GetMergedDesktopOverlayStyle()
+    private TrackerMemory BuildMemoryWriteSnapshot()
+    {
+        if (_memoryWriteSnapshot == null || _memoryWriteSnapshotRequiresFullRefresh)
+        {
+            _memoryWriteSnapshot = CloneTrackerMemory(_memory);
+            _dirtyMemorySongKeys.Clear();
+            _memoryWriteSnapshotRequiresFullRefresh = false;
+            return _memoryWriteSnapshot;
+        }
+
+        TrackerMemory next = new TrackerMemory
+        {
+            LifetimeGhostedNotes = _memory.LifetimeGhostedNotes
+        };
+        foreach (KeyValuePair<string, SongMemory> pair in _memoryWriteSnapshot.Songs)
+        {
+            next.Songs[pair.Key] = pair.Value;
+        }
+
+        foreach (string songKey in _dirtyMemorySongKeys)
+        {
+            if (_memory.Songs.TryGetValue(songKey, out SongMemory? songMemory))
+            {
+                next.Songs[songKey] = songMemory == null ? new SongMemory() : CloneSongMemory(songMemory);
+            }
+            else
+            {
+                next.Songs.Remove(songKey);
+            }
+        }
+
+        _dirtyMemorySongKeys.Clear();
+        _memoryWriteSnapshot = next;
+        return next;
+    }
+
+    private TrackerConfig BuildConfigWriteSnapshot()
+    {
+        if (_configWriteSnapshot == null || _configWriteSnapshotRequiresFullRefresh)
+        {
+            _configWriteSnapshot = CloneTrackerConfig(_config);
+            _configWriteSnapshot.DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle);
+            _dirtyConfigSongKeys.Clear();
+            _configWriteSnapshotRequiresFullRefresh = false;
+            return _configWriteSnapshot;
+        }
+
+        TrackerConfig next = new TrackerConfig
+        {
+            OverlayEditor = CloneOverlayEditorConfig(_config.OverlayEditor ?? new OverlayEditorConfig()),
+            DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle)
+        };
+        foreach (KeyValuePair<string, bool> pair in EnsureDefaultEnabledTextExports())
+        {
+            next.DefaultEnabledTextExports[pair.Key] = pair.Value;
+        }
+
+        foreach (KeyValuePair<string, SongConfig> pair in _configWriteSnapshot.Songs)
+        {
+            next.Songs[pair.Key] = pair.Value;
+        }
+
+        foreach (string songKey in _dirtyConfigSongKeys)
+        {
+            if (_config.Songs.TryGetValue(songKey, out SongConfig? songConfig))
+            {
+                next.Songs[songKey] = songConfig == null ? new SongConfig() : CloneSongConfig(songConfig);
+            }
+            else
+            {
+                next.Songs.Remove(songKey);
+            }
+        }
+
+        _dirtyConfigSongKeys.Clear();
+        _configWriteSnapshot = next;
+        return next;
+    }
+
+    private void RefreshMergedDesktopOverlayStyle()
     {
         DesktopOverlayStyleConfig configStyle = _config.DesktopOverlayStyle ?? new DesktopOverlayStyleConfig();
         if (string.IsNullOrWhiteSpace(_desktopStylePath) || !File.Exists(_desktopStylePath))
         {
-            return CloneDesktopOverlayStyle(configStyle);
+            _mergedDesktopOverlayStyle = CloneDesktopOverlayStyle(configStyle);
+            _config.DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle);
+            return;
         }
 
         DesktopOverlayStyleConfig merged = LoadJson(_desktopStylePath, CloneDesktopOverlayStyle(configStyle));
@@ -7236,7 +7722,13 @@ internal sealed class V1StockTracker
         merged.BorderG = configStyle.BorderG;
         merged.BorderB = configStyle.BorderB;
         merged.BorderA = configStyle.BorderA;
-        return merged;
+        _mergedDesktopOverlayStyle = merged;
+        _config.DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle);
+    }
+
+    private DesktopOverlayStyleConfig GetMergedDesktopOverlayStyle()
+    {
+        return CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle);
     }
 
     private static DesktopOverlayStyleConfig CloneDesktopOverlayStyle(DesktopOverlayStyleConfig style)
@@ -7255,6 +7747,140 @@ internal sealed class V1StockTracker
             NoteSplitFontScale = style.NoteSplitFontScale,
             NoteSplitTopMost = style.NoteSplitTopMost
         };
+    }
+
+    private static OverlayEditorConfig CloneOverlayEditorConfig(OverlayEditorConfig config)
+    {
+        return new OverlayEditorConfig
+        {
+            X = config.X,
+            Y = config.Y,
+            Width = config.Width,
+            Height = config.Height,
+            BackgroundA = config.BackgroundA,
+            ResizeHandleHidden = config.ResizeHandleHidden
+        };
+    }
+
+    private static OverlayWidgetConfig CloneOverlayWidgetConfig(OverlayWidgetConfig config)
+    {
+        return new OverlayWidgetConfig
+        {
+            Enabled = config.Enabled,
+            X = config.X,
+            Y = config.Y,
+            Width = config.Width,
+            Height = config.Height,
+            FontScale = config.FontScale,
+            ZIndex = config.ZIndex,
+            ResizeModeVersion = config.ResizeModeVersion,
+            ResizeHandleHidden = config.ResizeHandleHidden,
+            BackgroundR = config.BackgroundR,
+            BackgroundG = config.BackgroundG,
+            BackgroundB = config.BackgroundB,
+            BackgroundA = config.BackgroundA
+        };
+    }
+
+    private static SongConfig CloneSongConfig(SongConfig config)
+    {
+        SongConfig clone = new SongConfig
+        {
+            Title = config.Title,
+            Artist = config.Artist,
+            Charter = config.Charter
+        };
+
+        foreach (KeyValuePair<string, bool> pair in config.TrackedSections)
+        {
+            clone.TrackedSections[pair.Key] = pair.Value;
+        }
+
+        foreach (KeyValuePair<string, OverlayWidgetConfig> pair in config.OverlayWidgets)
+        {
+            clone.OverlayWidgets[pair.Key] = pair.Value == null ? new OverlayWidgetConfig() : CloneOverlayWidgetConfig(pair.Value);
+        }
+
+        return clone;
+    }
+
+    private static TrackerConfig CloneTrackerConfig(TrackerConfig config)
+    {
+        TrackerConfig clone = new TrackerConfig
+        {
+            OverlayEditor = CloneOverlayEditorConfig(config.OverlayEditor ?? new OverlayEditorConfig()),
+            DesktopOverlayStyle = CloneDesktopOverlayStyle(config.DesktopOverlayStyle ?? new DesktopOverlayStyleConfig())
+        };
+
+        foreach (KeyValuePair<string, SongConfig> pair in config.Songs)
+        {
+            clone.Songs[pair.Key] = pair.Value == null ? new SongConfig() : CloneSongConfig(pair.Value);
+        }
+
+        foreach (KeyValuePair<string, bool> pair in config.DefaultEnabledTextExports)
+        {
+            clone.DefaultEnabledTextExports[pair.Key] = pair.Value;
+        }
+
+        return clone;
+    }
+
+    private static SectionMemory CloneSectionMemory(SectionMemory memory)
+    {
+        return new SectionMemory
+        {
+            Tracked = memory.Tracked,
+            RunsPast = memory.RunsPast,
+            Attempts = memory.Attempts,
+            KilledTheRun = memory.KilledTheRun,
+            PreviousValidRunMissCount = memory.PreviousValidRunMissCount,
+            BestMissCount = memory.BestMissCount
+        };
+    }
+
+    private static SongMemory CloneSongMemory(SongMemory memory)
+    {
+        SongMemory clone = new SongMemory
+        {
+            Title = memory.Title,
+            Artist = memory.Artist,
+            Charter = memory.Charter,
+            Attempts = memory.Attempts,
+            Starts = memory.Starts,
+            Restarts = memory.Restarts,
+            LifetimeGhostedNotes = memory.LifetimeGhostedNotes,
+            BestStreak = memory.BestStreak,
+            BestRunMissedNotes = memory.BestRunMissedNotes,
+            BestRunOverstrums = memory.BestRunOverstrums,
+            FcAchieved = memory.FcAchieved
+        };
+
+        foreach (KeyValuePair<string, SectionMemory> pair in memory.Sections)
+        {
+            clone.Sections[pair.Key] = pair.Value == null ? new SectionMemory() : CloneSectionMemory(pair.Value);
+        }
+
+        foreach (CompletedRunRecord run in memory.CompletedRuns)
+        {
+            clone.CompletedRuns.Add(run.Clone());
+        }
+
+        return clone;
+    }
+
+    private static TrackerMemory CloneTrackerMemory(TrackerMemory memory)
+    {
+        TrackerMemory clone = new TrackerMemory
+        {
+            LifetimeGhostedNotes = memory.LifetimeGhostedNotes
+        };
+
+        foreach (KeyValuePair<string, SongMemory> pair in memory.Songs)
+        {
+            clone.Songs[pair.Key] = pair.Value == null ? new SongMemory() : CloneSongMemory(pair.Value);
+        }
+
+        return clone;
     }
 
     private static T LoadJson<T>(string path, T fallback)
@@ -7294,6 +7920,86 @@ internal sealed class V1StockTracker
 
                 Thread.Sleep(25);
             }
+        }
+    }
+
+    private void QueuePersistenceWrite(string path, object snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(path) || snapshot == null)
+        {
+            return;
+        }
+
+        lock (_persistenceWriteSync)
+        {
+            if (!_persistenceWriteThreadStarted)
+            {
+                _persistenceWriteThreadStarted = true;
+                _persistenceWriteThread = new Thread(PersistenceWriteLoop)
+                {
+                    IsBackground = true,
+                    Name = "StatTrackPersistenceWriter"
+                };
+                _persistenceWriteThread.Start();
+            }
+
+            _pendingPersistenceWrites[path] = new PersistenceWriteItem
+            {
+                Path = path,
+                Snapshot = snapshot
+            };
+        }
+
+        _persistenceWriteSignal.Set();
+    }
+
+    private void PersistenceWriteLoop()
+    {
+        try
+        {
+            while (true)
+            {
+                _persistenceWriteSignal.WaitOne();
+
+                PersistenceWriteItem[] pendingWrites;
+                lock (_persistenceWriteSync)
+                {
+                    if (_pendingPersistenceWrites.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    pendingWrites = _pendingPersistenceWrites.Values.ToArray();
+                    _pendingPersistenceWrites.Clear();
+                }
+
+                foreach (PersistenceWriteItem pendingWrite in pendingWrites)
+                {
+                    try
+                    {
+                        string content = JsonConvert.SerializeObject(pendingWrite.Snapshot);
+                        lock (_fileWriteSync)
+                        {
+                            if (_fileWriteCache.TryGetValue(pendingWrite.Path, out string? previousContent) &&
+                                string.Equals(previousContent, content, StringComparison.Ordinal))
+                            {
+                                continue;
+                            }
+
+                            WriteJsonFile(pendingWrite.Path, content);
+                            _fileWriteCache[pendingWrite.Path] = content;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        StockTrackerLog.Write(ex);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
         }
     }
 
@@ -7358,6 +8064,11 @@ internal sealed class V1StockTracker
             {
                 File.Delete(path);
             }
+        }
+
+        lock (_persistenceWriteSync)
+        {
+            _pendingPersistenceWrites.Remove(path);
         }
     }
 
@@ -7516,23 +8227,51 @@ internal sealed class V1StockTracker
         };
     }
 
-    private List<NoteSplitSectionState> BuildNoteSplitSections(IReadOnlyList<SectionDescriptor> sections, SongMemory songMemory, string currentSectionName)
+    private List<NoteSplitSectionState> GetOrBuildNoteSplitSections(string songKey, IReadOnlyList<SectionDescriptor> sections, SongMemory songMemory, string currentSectionName)
     {
-        var rows = new List<NoteSplitSectionState>(sections.Count);
-        for (int i = 0; i < sections.Count; i++)
+        if (_noteSplitSnapshotCache == null ||
+            !string.Equals(_noteSplitSnapshotCache.SongKey, songKey, StringComparison.Ordinal) ||
+            _noteSplitSnapshotCache.MemoryVersion != _sectionMemoryVersion ||
+            _noteSplitSnapshotCache.SectionCount != sections.Count)
         {
-            SectionDescriptor section = sections[i];
-            string sectionKey = BuildSectionOverlayKey(sections, section);
-            songMemory.Sections.TryGetValue(sectionKey, out SectionMemory? sectionMemory);
-            _runState.NoteSplitSectionsThisRun.TryGetValue(sectionKey, out NoteSplitSectionRunState? runState);
+            var cachedRows = new List<CachedNoteSplitSectionRow>(sections.Count);
+            for (int i = 0; i < sections.Count; i++)
+            {
+                SectionDescriptor section = sections[i];
+                string sectionKey = BuildSectionOverlayKey(sections, section);
+                songMemory.Sections.TryGetValue(sectionKey, out SectionMemory? sectionMemory);
+                cachedRows.Add(new CachedNoteSplitSectionRow
+                {
+                    Order = section.Index,
+                    Key = sectionKey,
+                    Name = sectionKey,
+                    PreviousValidRunMissCount = sectionMemory?.PreviousValidRunMissCount,
+                    PersonalBestMissCount = sectionMemory?.BestMissCount
+                });
+            }
+
+            _noteSplitSnapshotCache = new NoteSplitSnapshotCache
+            {
+                SongKey = songKey,
+                MemoryVersion = _sectionMemoryVersion,
+                SectionCount = sections.Count,
+                Rows = cachedRows
+            };
+        }
+
+        var rows = new List<NoteSplitSectionState>(_noteSplitSnapshotCache.Rows.Count);
+        for (int i = 0; i < _noteSplitSnapshotCache.Rows.Count; i++)
+        {
+            CachedNoteSplitSectionRow row = _noteSplitSnapshotCache.Rows[i];
+            _runState.NoteSplitSectionsThisRun.TryGetValue(row.Key, out NoteSplitSectionRunState? runState);
             rows.Add(new NoteSplitSectionState
             {
-                Order = section.Index,
-                Key = sectionKey,
-                Name = sectionKey,
-                IsCurrent = string.Equals(sectionKey, currentSectionName, StringComparison.Ordinal),
-                PreviousValidRunMissCount = sectionMemory?.PreviousValidRunMissCount,
-                PersonalBestMissCount = sectionMemory?.BestMissCount,
+                Order = row.Order,
+                Key = row.Key,
+                Name = row.Name,
+                IsCurrent = string.Equals(row.Key, currentSectionName, StringComparison.Ordinal),
+                PreviousValidRunMissCount = row.PreviousValidRunMissCount,
+                PersonalBestMissCount = row.PersonalBestMissCount,
                 CurrentRunMissCount = runState?.MissCount,
                 ResultKind = runState?.ResultKind ?? NoteSplitResultKind.None
             });
@@ -7693,6 +8432,81 @@ internal sealed class V1StockTracker
     }
 }
 
+public sealed class EnabledTextExportSnapshot
+{
+    public EnabledTextExportSnapshot()
+    {
+    }
+
+    public EnabledTextExportSnapshot(IReadOnlyDictionary<string, bool> values)
+    {
+        NoteSplitMode = GetValue(values, "note_split_mode");
+        CurrentSection = GetValue(values, "current_section");
+        Streak = GetValue(values, "streak");
+        BestStreak = GetValue(values, "best_streak");
+        Attempts = GetValue(values, "attempts");
+        CurrentGhostedNotes = GetValue(values, "current_ghosted_notes");
+        CurrentOverstrums = GetValue(values, "current_overstrums");
+        CurrentMissedNotes = GetValue(values, "current_missed_notes");
+        LifetimeGhostedNotes = GetValue(values, "lifetime_ghosted_notes");
+        GlobalLifetimeGhostedNotes = GetValue(values, "global_lifetime_ghosted_notes");
+        FcAchieved = GetValue(values, "fc_achieved");
+        CompletedRuns = GetValue(values, "completed_runs");
+    }
+
+    public bool NoteSplitMode { get; }
+    public bool CurrentSection { get; }
+    public bool Streak { get; }
+    public bool BestStreak { get; }
+    public bool Attempts { get; }
+    public bool CurrentGhostedNotes { get; }
+    public bool CurrentOverstrums { get; }
+    public bool CurrentMissedNotes { get; }
+    public bool LifetimeGhostedNotes { get; }
+    public bool GlobalLifetimeGhostedNotes { get; }
+    public bool FcAchieved { get; }
+    public bool CompletedRuns { get; }
+
+    [JsonIgnore]
+    public bool HasAnyObsTextExport =>
+        CurrentSection ||
+        Streak ||
+        BestStreak ||
+        Attempts ||
+        CurrentGhostedNotes ||
+        CurrentOverstrums ||
+        CurrentMissedNotes ||
+        LifetimeGhostedNotes ||
+        GlobalLifetimeGhostedNotes ||
+        FcAchieved ||
+        CompletedRuns;
+
+    public bool IsEnabled(string exportKey)
+    {
+        return exportKey switch
+        {
+            "note_split_mode" => NoteSplitMode,
+            "current_section" => CurrentSection,
+            "streak" => Streak,
+            "best_streak" => BestStreak,
+            "attempts" => Attempts,
+            "current_ghosted_notes" => CurrentGhostedNotes,
+            "current_overstrums" => CurrentOverstrums,
+            "current_missed_notes" => CurrentMissedNotes,
+            "lifetime_ghosted_notes" => LifetimeGhostedNotes,
+            "global_lifetime_ghosted_notes" => GlobalLifetimeGhostedNotes,
+            "fc_achieved" => FcAchieved,
+            "completed_runs" => CompletedRuns,
+            _ => false
+        };
+    }
+
+    private static bool GetValue(IReadOnlyDictionary<string, bool> values, string key)
+    {
+        return values.TryGetValue(key, out bool enabled) && enabled;
+    }
+}
+
 public sealed class TrackerState
 {
     public bool IsInSong { get; set; }
@@ -7737,7 +8551,7 @@ public sealed class TrackerState
     [JsonIgnore]
     public List<CompletedRunRecord> CompletedRuns { get; set; } = new();
     [JsonIgnore]
-    public Dictionary<string, bool> EnabledTextExports { get; set; } = new();
+    public EnabledTextExportSnapshot EnabledTextExports { get; set; } = new();
 }
 
 public sealed class SongDescriptor
@@ -7789,6 +8603,42 @@ internal sealed class SectionSnapshotCache
     public List<TrackedSectionState> TrackedSections { get; set; } = new();
     public List<SectionStatsState> SectionStats { get; set; } = new();
     public Dictionary<string, SectionStatsState> SectionStatsByName { get; set; } = new(StringComparer.Ordinal);
+}
+
+internal sealed class OverlayRenderSnapshot
+{
+    public TrackerState State { get; set; } = new();
+    public SongConfig? SongConfig { get; set; }
+    public bool ShouldRender { get; set; }
+    public bool OverlayEditorVisible { get; set; }
+    public bool RenderWidgetsInGame { get; set; }
+    public List<OverlayWidgetRenderEntry> WidgetEntries { get; set; } = new();
+}
+
+internal sealed class OverlayWidgetRenderEntry
+{
+    public string WidgetKey { get; set; } = string.Empty;
+    public OverlayWidgetConfig Config { get; set; } = new();
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public int DefaultIndex { get; set; }
+}
+
+internal sealed class NoteSplitSnapshotCache
+{
+    public string SongKey { get; set; } = string.Empty;
+    public int MemoryVersion { get; set; }
+    public int SectionCount { get; set; }
+    public List<CachedNoteSplitSectionRow> Rows { get; set; } = new();
+}
+
+internal sealed class CachedNoteSplitSectionRow
+{
+    public int Order { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int? PreviousValidRunMissCount { get; set; }
+    public int? PersonalBestMissCount { get; set; }
 }
 
 internal sealed class DifficultyInfo
@@ -8149,6 +8999,12 @@ internal sealed class ExportWorkItem
     public TrackerState State { get; set; } = new();
     public bool ExportStateJson { get; set; }
     public bool ExportObs { get; set; }
+}
+
+internal sealed class PersistenceWriteItem
+{
+    public string Path { get; set; } = string.Empty;
+    public object Snapshot { get; set; } = string.Empty;
 }
 
 internal sealed class PlayerMissCounter

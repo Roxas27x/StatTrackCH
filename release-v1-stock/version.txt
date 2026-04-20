@@ -1,5 +1,5 @@
 StatTrack
-Release: StatTrack v1.0.3
+Release: StatTrack v1.0.4
 Base Game: Clone Hero v1.0.0.4080-final
 Overlay Hotkeys: Home / Ctrl+O / F8
 Data Folder: %LOCALAPPDATA%\StatTrack

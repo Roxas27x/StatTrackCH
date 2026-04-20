@@ -914,8 +914,10 @@ internal static class NoteSplitRenderer
     public static void DrawPanel(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
     {
         const float padding = 10f;
-        const float headerHeight = 58f;
-        const float footerHeight = 112f;
+        const float headerGap = 4f;
+        const float footerGap = 4f;
+        const float minimumHeaderHeight = 58f;
+        const float minimumFooterHeight = 112f;
         using var backgroundBrush = new SolidBrush(Color.FromArgb(238, 8, 8, 8));
         using var borderPen = new Pen(GetBorderColor(style), 1f);
         graphics.FillRectangle(backgroundBrush, rect);
@@ -923,133 +925,161 @@ internal static class NoteSplitRenderer
 
         string title = GetSongTitle(state);
         string artist = state.Song?.Artist ?? string.Empty;
-        using (var titleFont = CreateFont(style, Clamp(rect.Width * 0.065f, 12f, 20f), FontStyle.Bold))
-        using (var subtitleFont = CreateFont(style, 12f, FontStyle.Regular))
-        using (var attemptsFont = CreateFont(style, 18f, FontStyle.Bold))
-        using (var smallLabelFont = CreateFont(style, 10f, FontStyle.Regular))
-        using (var whiteBrush = new SolidBrush(Color.White))
-        using (var mutedBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182)))
-        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter })
-        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Near })
-        {
-            RectangleF titleRect = new RectangleF(rect.X + padding, rect.Y + padding - 2f, rect.Width - 96f, 24f);
-            RectangleF artistRect = new RectangleF(rect.X + padding, rect.Y + padding + 20f, rect.Width - 96f, 18f);
-            RectangleF attemptsRect = new RectangleF(rect.Right - 72f, rect.Y + padding - 2f, 60f, 24f);
-            RectangleF attemptsLabelRect = new RectangleF(rect.Right - 72f, rect.Y + padding + 22f, 60f, 14f);
-            graphics.DrawString(title, titleFont, whiteBrush, titleRect, leftFormat);
-            if (!string.IsNullOrWhiteSpace(artist))
-            {
-                graphics.DrawString(artist, subtitleFont, mutedBrush, artistRect, leftFormat);
-            }
-
-            graphics.DrawString(state.Attempts.ToString(CultureInfo.InvariantCulture), attemptsFont, whiteBrush, attemptsRect, rightFormat);
-            graphics.DrawString("Attempts", smallLabelFont, mutedBrush, attemptsLabelRect, rightFormat);
-        }
-
-        RectangleF listRect = new RectangleF(rect.X + 1f, rect.Y + headerHeight, rect.Width - 2f, Math.Max(0f, rect.Height - headerHeight - footerHeight));
-        List<OverlayNoteSplitSectionState> rows = state.NoteSplitSections
-            .OrderBy(section => section.Order)
-            .ToList();
-        if (rows.Count == 0)
-        {
-            using var emptyFont = CreateFont(style, 14f, FontStyle.Regular);
-            using var emptyBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182));
-            using var centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            graphics.DrawString("No chart sections found.", emptyFont, emptyBrush, listRect, centered);
-        }
-        else
-        {
-            float rowHeight = Math.Min(28f, Math.Max(11f, listRect.Height / Math.Max(1, rows.Count)));
-            float nameFontSize = Clamp(rowHeight * 0.58f, 9f, 15f);
-            float valueFontSize = Clamp(rowHeight * 0.62f, 10f, 16f);
-            float previousColumnWidth = 56f;
-            float currentColumnWidth = 56f;
-            float bestColumnWidth = 56f;
-            GraphicsState clipState = graphics.Save();
-            graphics.SetClip(listRect);
-            for (int i = 0; i < rows.Count; i++)
-            {
-                OverlayNoteSplitSectionState row = rows[i];
-                RectangleF rowRect = new RectangleF(listRect.X, listRect.Y + (rowHeight * i), listRect.Width, rowHeight);
-                Color rowBackground = row.IsCurrent
-                    ? Color.FromArgb(255, 42, 91, 180)
-                    : (i % 2 == 0 ? Color.FromArgb(255, 18, 18, 18) : Color.FromArgb(255, 12, 12, 12));
-                using var rowBrush = new SolidBrush(rowBackground);
-                using var rowDividerPen = new Pen(Color.FromArgb(255, 28, 28, 28), 1f);
-                graphics.FillRectangle(rowBrush, rowRect);
-                graphics.DrawLine(rowDividerPen, rowRect.X, rowRect.Bottom - 1f, rowRect.Right, rowRect.Bottom - 1f);
-
-                RectangleF bestRect = new RectangleF(rowRect.Right - bestColumnWidth - 8f, rowRect.Y + 1f, bestColumnWidth, rowRect.Height - 2f);
-                RectangleF currentRunRect = new RectangleF(bestRect.X - currentColumnWidth - 4f, rowRect.Y + 1f, currentColumnWidth, rowRect.Height - 2f);
-                RectangleF previousRunRect = new RectangleF(currentRunRect.X - previousColumnWidth - 4f, rowRect.Y + 1f, previousColumnWidth, rowRect.Height - 2f);
-                RectangleF nameRect = new RectangleF(rowRect.X + 10f, rowRect.Y + 1f, Math.Max(40f, previousRunRect.X - rowRect.X - 14f), rowRect.Height - 2f);
-                using var nameFont = CreateFont(style, nameFontSize, row.IsCurrent ? FontStyle.Bold : FontStyle.Regular);
-                using var valueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
-                using var nameBrush = new SolidBrush(Color.White);
-                using var previousBrush = new SolidBrush(GetPreviousRunColor(row.PreviousValidRunMissCount));
-                using var currentBrush = new SolidBrush(GetCurrentRunColor(row.ResultKind, row.CurrentRunMissCount));
-                using var bestBrush = new SolidBrush(GetPersonalBestColor(row));
-                using var nameFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
-                using var valueFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
-                graphics.DrawString(row.Name ?? string.Empty, nameFont, nameBrush, nameRect, nameFormat);
-                if (row.PreviousValidRunMissCount.HasValue)
-                {
-                    graphics.DrawString(FormatSectionValue(row.PreviousValidRunMissCount.Value), valueFont, previousBrush, previousRunRect, valueFormat);
-                }
-                if (row.CurrentRunMissCount.HasValue)
-                {
-                    graphics.DrawString(FormatSectionValue(row.CurrentRunMissCount.Value), valueFont, currentBrush, currentRunRect, valueFormat);
-                }
-
-                string personalBestText = row.PersonalBestMissCount.HasValue
-                    ? FormatSectionValue(row.PersonalBestMissCount.Value)
-                    : "--";
-                graphics.DrawString(personalBestText, valueFont, bestBrush, bestRect, valueFormat);
-            }
-            graphics.Restore(clipState);
-        }
-
-        RectangleF totalRect = new RectangleF(rect.X + padding, rect.Bottom - footerHeight + 4f, rect.Width - (padding * 2f), 50f);
-        RectangleF personalBestRect = new RectangleF(rect.X + padding, rect.Bottom - 48f, rect.Width - (padding * 2f), 16f);
-        RectangleF previousRect = new RectangleF(rect.X + padding, rect.Bottom - 28f, rect.Width - (padding * 2f), 18f);
-        using (var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold))
-        using (var totalBrush = new SolidBrush(state.CurrentMissedNotes == 0 ? Color.FromArgb(255, 255, 214, 84) : Color.FromArgb(255, 236, 86, 86)))
-        using (var totalFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-        {
-            graphics.DrawString(state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture), totalFont, totalBrush, totalRect, totalFormat);
-        }
-
+        string attemptsText = state.Attempts.ToString(CultureInfo.InvariantCulture);
         string personalBestValue = FormatPersonalBestSummary(state.SongPersonalBestMissCount, state.SongPersonalBestOverstrums);
-        using (var personalBestFont = CreateFont(style, 11f, FontStyle.Regular))
-        using (var personalBestValueFont = CreateFont(style, 12f, FontStyle.Bold))
-        using (var labelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194)))
-        using (var valueBrush = new SolidBrush(Color.White))
-        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
-        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
-        {
-            RectangleF personalBestLabelRect = new RectangleF(personalBestRect.X, personalBestRect.Y, Math.Max(40f, personalBestRect.Width - 120f), personalBestRect.Height);
-            RectangleF personalBestValueRect = new RectangleF(personalBestRect.Right - 112f, personalBestRect.Y, 112f, personalBestRect.Height);
-            graphics.DrawString("PB:", personalBestFont, labelBrush, personalBestLabelRect, leftFormat);
-            graphics.DrawString(personalBestValue, personalBestValueFont, valueBrush, personalBestValueRect, rightFormat);
-        }
-
         string previousLabel = string.IsNullOrWhiteSpace(state.PreviousSection)
             ? "Previous Section"
             : "Previous Section: " + state.PreviousSection;
         string previousValue = state.PreviousSectionMissCount.HasValue
             ? FormatSectionValue(state.PreviousSectionMissCount.Value)
             : "--";
-        using (var previousFont = CreateFont(style, 11f, FontStyle.Regular))
-        using (var previousValueFont = CreateFont(style, 12f, FontStyle.Bold))
-        using (var labelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194)))
-        using (var valueBrush = new SolidBrush(GetCurrentRunColor(state.PreviousSectionResultKind, state.PreviousSectionMissCount)))
-        using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
-        using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+
+        using var titleFont = CreateFont(style, Clamp(rect.Width * 0.065f, 12f, 20f), FontStyle.Bold);
+        using var subtitleFont = CreateFont(style, 12f, FontStyle.Regular);
+        using var attemptsFont = CreateFont(style, 18f, FontStyle.Bold);
+        using var smallLabelFont = CreateFont(style, 10f, FontStyle.Regular);
+        using var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold);
+        using var personalBestFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var personalBestValueFont = CreateFont(style, 12f, FontStyle.Bold);
+        using var previousFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var previousValueFont = CreateFont(style, 12f, FontStyle.Bold);
+        using var whiteBrush = new SolidBrush(Color.White);
+        using var mutedBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182));
+        using var headerLeftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter };
+        using var headerRightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Near };
+        using var totalBrush = new SolidBrush(state.CurrentMissedNotes == 0 ? Color.FromArgb(255, 255, 214, 84) : Color.FromArgb(255, 236, 86, 86));
+        using var totalFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        using var footerLabelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194));
+        using var footerValueBrush = new SolidBrush(Color.White);
+        using var previousValueBrush = new SolidBrush(GetCurrentRunColor(state.PreviousSectionResultKind, state.PreviousSectionMissCount));
+        using var footerLeftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+        using var footerRightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
         {
+            float titleHeight = Math.Max(1f, titleFont.GetHeight(graphics));
+            float subtitleHeight = Math.Max(1f, subtitleFont.GetHeight(graphics));
+            float attemptsHeight = Math.Max(1f, attemptsFont.GetHeight(graphics));
+            float attemptsLabelHeight = Math.Max(1f, smallLabelFont.GetHeight(graphics));
+            float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(artist) ? headerGap + subtitleHeight : 0f);
+            float attemptsBlockHeight = attemptsHeight + headerGap + attemptsLabelHeight;
+            float attemptsColumnWidth = Math.Max(
+                60f,
+                Math.Max(
+                    graphics.MeasureString(attemptsText, attemptsFont).Width,
+                    graphics.MeasureString("Attempts", smallLabelFont).Width) + 10f);
+            float headerHeight = Math.Max(minimumHeaderHeight, padding + Math.Max(headerTitleBlockHeight, attemptsBlockHeight) + padding);
+
+            float totalHeight = Math.Max(1f, totalFont.GetHeight(graphics));
+            float personalBestHeight = Math.Max(personalBestFont.GetHeight(graphics), personalBestValueFont.GetHeight(graphics));
+            float previousHeight = Math.Max(previousFont.GetHeight(graphics), previousValueFont.GetHeight(graphics));
+            float totalRectHeight = totalHeight + 10f;
+            float personalBestRectHeight = personalBestHeight + 2f;
+            float previousRectHeight = previousHeight + 2f;
+            float footerHeight = Math.Max(
+                minimumFooterHeight,
+                padding + totalRectHeight + footerGap + personalBestRectHeight + footerGap + previousRectHeight + padding);
+
+            float headerTop = rect.Y + padding;
+            float attemptsX = rect.Right - padding - attemptsColumnWidth;
+            RectangleF titleRect = new RectangleF(rect.X + padding, headerTop, Math.Max(40f, attemptsX - rect.X - (padding * 2f)), titleHeight + 2f);
+            RectangleF artistRect = new RectangleF(rect.X + padding, titleRect.Bottom + headerGap, titleRect.Width, subtitleHeight + 2f);
+            RectangleF attemptsRect = new RectangleF(attemptsX, headerTop, attemptsColumnWidth, attemptsHeight + 2f);
+            RectangleF attemptsLabelRect = new RectangleF(attemptsX, attemptsRect.Bottom + headerGap, attemptsColumnWidth, attemptsLabelHeight + 2f);
+
+            RectangleF listRect = new RectangleF(rect.X + 1f, rect.Y + headerHeight, rect.Width - 2f, Math.Max(0f, rect.Height - headerHeight - footerHeight));
+            float footerTop = rect.Bottom - footerHeight + padding;
+            RectangleF totalRect = new RectangleF(rect.X + padding, footerTop, rect.Width - (padding * 2f), totalRectHeight);
+            RectangleF personalBestRect = new RectangleF(rect.X + padding, totalRect.Bottom + footerGap, rect.Width - (padding * 2f), personalBestRectHeight);
+            RectangleF previousRect = new RectangleF(rect.X + padding, personalBestRect.Bottom + footerGap, rect.Width - (padding * 2f), previousRectHeight);
+
+            graphics.DrawString(title, titleFont, whiteBrush, titleRect, headerLeftFormat);
+            if (!string.IsNullOrWhiteSpace(artist))
+            {
+                graphics.DrawString(artist, subtitleFont, mutedBrush, artistRect, headerLeftFormat);
+            }
+
+            graphics.DrawString(attemptsText, attemptsFont, whiteBrush, attemptsRect, headerRightFormat);
+            graphics.DrawString("Attempts", smallLabelFont, mutedBrush, attemptsLabelRect, headerRightFormat);
+
+            List<OverlayNoteSplitSectionState> rows = state.NoteSplitSections
+                .OrderBy(section => section.Order)
+                .ToList();
+            if (rows.Count == 0)
+            {
+                using var emptyFont = CreateFont(style, 14f, FontStyle.Regular);
+                using var emptyBrush = new SolidBrush(Color.FromArgb(255, 182, 182, 182));
+                using var centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                graphics.DrawString("No chart sections found.", emptyFont, emptyBrush, listRect, centered);
+            }
+            else
+            {
+                float targetRowHeight = Math.Max(11f, listRect.Height / Math.Max(1, rows.Count));
+                float nameFontSize = Clamp(targetRowHeight * 0.58f, 9f, 15f);
+                float valueFontSize = Clamp(targetRowHeight * 0.62f, 10f, 16f);
+                using var sampleNameFont = CreateFont(style, nameFontSize, FontStyle.Regular);
+                using var sampleValueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
+                float measuredTextHeight = Math.Max(sampleNameFont.GetHeight(graphics), sampleValueFont.GetHeight(graphics));
+                float rowPaddingY = Math.Max(1f, measuredTextHeight * 0.18f);
+                float rowHeight = Math.Max(targetRowHeight, measuredTextHeight + (rowPaddingY * 2f));
+                float previousColumnWidth = 56f;
+                float currentColumnWidth = 56f;
+                float bestColumnWidth = 56f;
+                GraphicsState clipState = graphics.Save();
+                graphics.SetClip(listRect);
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    OverlayNoteSplitSectionState row = rows[i];
+                    RectangleF rowRect = new RectangleF(listRect.X, listRect.Y + (rowHeight * i), listRect.Width, rowHeight);
+                    Color rowBackground = row.IsCurrent
+                        ? Color.FromArgb(255, 42, 91, 180)
+                        : (i % 2 == 0 ? Color.FromArgb(255, 18, 18, 18) : Color.FromArgb(255, 12, 12, 12));
+                    using var rowBrush = new SolidBrush(rowBackground);
+                    using var rowDividerPen = new Pen(Color.FromArgb(255, 28, 28, 28), 1f);
+                    graphics.FillRectangle(rowBrush, rowRect);
+                    graphics.DrawLine(rowDividerPen, rowRect.X, rowRect.Bottom - 1f, rowRect.Right, rowRect.Bottom - 1f);
+
+                    RectangleF bestRect = new RectangleF(rowRect.Right - bestColumnWidth - 8f, rowRect.Y + 1f, bestColumnWidth, rowRect.Height - 2f);
+                    RectangleF currentRunRect = new RectangleF(bestRect.X - currentColumnWidth - 4f, rowRect.Y + 1f, currentColumnWidth, rowRect.Height - 2f);
+                    RectangleF previousRunRect = new RectangleF(currentRunRect.X - previousColumnWidth - 4f, rowRect.Y + 1f, previousColumnWidth, rowRect.Height - 2f);
+                    RectangleF nameRect = new RectangleF(rowRect.X + 10f, rowRect.Y + 1f, Math.Max(40f, previousRunRect.X - rowRect.X - 14f), rowRect.Height - 2f);
+                    using var nameFont = CreateFont(style, nameFontSize, row.IsCurrent ? FontStyle.Bold : FontStyle.Regular);
+                    using var valueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
+                    using var nameBrush = new SolidBrush(Color.White);
+                    using var previousBrush = new SolidBrush(GetPreviousRunColor(row.PreviousValidRunMissCount));
+                    using var currentBrush = new SolidBrush(GetCurrentRunColor(row.ResultKind, row.CurrentRunMissCount));
+                    using var bestBrush = new SolidBrush(GetPersonalBestColor(row));
+                    using var nameFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
+                    using var valueFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+                    nameRect = new RectangleF(nameRect.X, rowRect.Y + rowPaddingY, nameRect.Width, Math.Max(1f, rowRect.Height - (rowPaddingY * 2f)));
+                    previousRunRect = new RectangleF(previousRunRect.X, rowRect.Y + rowPaddingY, previousRunRect.Width, Math.Max(1f, rowRect.Height - (rowPaddingY * 2f)));
+                    currentRunRect = new RectangleF(currentRunRect.X, rowRect.Y + rowPaddingY, currentRunRect.Width, Math.Max(1f, rowRect.Height - (rowPaddingY * 2f)));
+                    bestRect = new RectangleF(bestRect.X, rowRect.Y + rowPaddingY, bestRect.Width, Math.Max(1f, rowRect.Height - (rowPaddingY * 2f)));
+                    graphics.DrawString(row.Name ?? string.Empty, nameFont, nameBrush, nameRect, nameFormat);
+                    if (row.PreviousValidRunMissCount.HasValue)
+                    {
+                        graphics.DrawString(FormatSectionValue(row.PreviousValidRunMissCount.Value), valueFont, previousBrush, previousRunRect, valueFormat);
+                    }
+                    if (row.CurrentRunMissCount.HasValue)
+                    {
+                        graphics.DrawString(FormatSectionValue(row.CurrentRunMissCount.Value), valueFont, currentBrush, currentRunRect, valueFormat);
+                    }
+
+                    string personalBestText = row.PersonalBestMissCount.HasValue
+                        ? FormatSectionValue(row.PersonalBestMissCount.Value)
+                        : "--";
+                    graphics.DrawString(personalBestText, valueFont, bestBrush, bestRect, valueFormat);
+                }
+                graphics.Restore(clipState);
+            }
+            graphics.DrawString(state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture), totalFont, totalBrush, totalRect, totalFormat);
+            RectangleF personalBestLabelRect = new RectangleF(personalBestRect.X, personalBestRect.Y, Math.Max(40f, personalBestRect.Width - 120f), personalBestRect.Height);
+            RectangleF personalBestValueRect = new RectangleF(personalBestRect.Right - 112f, personalBestRect.Y, 112f, personalBestRect.Height);
+            graphics.DrawString("PB:", personalBestFont, footerLabelBrush, personalBestLabelRect, footerLeftFormat);
+            graphics.DrawString(personalBestValue, personalBestValueFont, footerValueBrush, personalBestValueRect, footerRightFormat);
+
             RectangleF previousLabelRect = new RectangleF(previousRect.X, previousRect.Y, Math.Max(40f, previousRect.Width - 72f), previousRect.Height);
             RectangleF previousValueRect = new RectangleF(previousRect.Right - 64f, previousRect.Y, 64f, previousRect.Height);
-            graphics.DrawString(previousLabel, previousFont, labelBrush, previousLabelRect, leftFormat);
-            graphics.DrawString(previousValue, previousValueFont, valueBrush, previousValueRect, rightFormat);
+            graphics.DrawString(previousLabel, previousFont, footerLabelBrush, previousLabelRect, footerLeftFormat);
+            graphics.DrawString(previousValue, previousValueFont, previousValueBrush, previousValueRect, footerRightFormat);
         }
     }
 
