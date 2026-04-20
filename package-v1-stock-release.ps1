@@ -4,7 +4,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildScript = Join-Path $root "build-v1-stock.ps1"
 $outDir = Join-Path $root "dist-v1-stock"
 $releaseDir = Join-Path $outDir "release"
-$zipPath = Join-Path $outDir "StatTrack-v1.0.0.4080.zip"
+$zipPath = Join-Path $outDir "StatTrack-v1.0.2.zip"
 
 if (-not (Test-Path $buildScript)) {
     throw "Missing build script: $buildScript"

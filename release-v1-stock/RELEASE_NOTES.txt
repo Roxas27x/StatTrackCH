@@ -1,10 +1,13 @@
-StatTrack - Release Notes
+StatTrack v1.0.2
 
-- NoteSplit Mode adds a LiveSplit-inspired section tracker based on per-section note misses.
-- NoteSplit runs in its own desktop window with taskbar visibility for easier OBS capture.
-- NoteSplit supports saved personal-best misses by section, previous-section summaries, and total song attempts.
-- Practice mode and bot play now hide NoteSplit entirely so no progress is tracked there.
-- Unplugging an input device during a song no longer forces the game to auto-pause.
-- OBS exports remain opt-in and configurable from the in-game overlay editor.
-- Desktop overlay support is included for borderless/windowed play.
-- Install and uninstall scripts are included for patching a vanilla Clone Hero v1 folder safely.
+Added a new previous valid run column to NoteSplit.
+Previous valid run only comes from non-practice, non-bot runs.
+Restarting mid-run now preserves the section results you actually reached, while unreached sections stay --.
+Current run, previous run, and PB are now easier to compare side by side as a result.
+
+Color updates
+
+Previous-run misses now stay red instead of white.
+PB misses now stay red instead of white.
+Any 0 in the current run or previous run is now gold.
+PB 0 stays white so it remains visually distinct.

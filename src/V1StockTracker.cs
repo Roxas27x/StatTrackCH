@@ -291,8 +291,8 @@ internal sealed class V1StockTracker
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.1";
-    private const string PublicVersionLabel = "StatTrack v1.0.1";
+    private const string PublicVersionNumber = "1.0.2";
+    private const string PublicVersionLabel = "StatTrack v1.0.2";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;
@@ -451,6 +451,7 @@ internal sealed class V1StockTracker
     private Process? _desktopOverlayProcess;
     private float _lastDesktopOverlayCheckAt = -999f;
     private bool _desktopOverlayLaunchFailed;
+    private bool _practiceAttemptRollbackApplied;
     private string? _lastMenuOverlayStateFailureMessage;
     private const float OverlayWidgetDefaultWidth = 300f;
     private const float OverlayWidgetDefaultHeight = 90f;
@@ -2933,6 +2934,32 @@ internal sealed class V1StockTracker
             ? _runState.CachedSongDuration
             : ConvertToDouble(_songDurationField?.GetValue(gameManager));
         bool isPractice = IsPracticeMode(gameManager);
+        if (isPractice)
+        {
+            if (!_practiceAttemptRollbackApplied)
+            {
+                SongMemory? practiceSongMemory = _runState.CachedSongMemory;
+                if (practiceSongMemory == null &&
+                    !string.IsNullOrWhiteSpace(_runState.SongKey) &&
+                    _memory.Songs.TryGetValue(_runState.SongKey, out SongMemory? existingSongMemory))
+                {
+                    practiceSongMemory = existingSongMemory;
+                }
+
+                if (practiceSongMemory != null && practiceSongMemory.Attempts > 0)
+                {
+                    practiceSongMemory.Attempts--;
+                    MarkMemoryDirty();
+                }
+
+                _practiceAttemptRollbackApplied = true;
+            }
+
+            ResetExactMissCounter(player);
+            ResetRunIfNeeded();
+            return CreateIdleState();
+        }
+        _practiceAttemptRollbackApplied = false;
         SongDescriptor song;
         if (canUseStableRunCache && _runState.CachedSongDescriptor != null)
         {

@@ -1,5 +1,11 @@
 StatTrack - Changelog
 
+2026-04-19
+- Added a previous valid run column to NoteSplit.
+- Previous valid run now preserves only the sections you actually reached before a restart.
+- Updated NoteSplit colors so previous-run and PB misses stay red.
+- Updated NoteSplit colors so current/previous 0s are gold while PB 0 remains white.
+
 2026-04-18
 - Added NoteSplit Mode for LiveSplit-style per-section miss tracking.
 - Added saved per-song, per-difficulty, and per-song-speed NoteSplit personal bests and attempts.
