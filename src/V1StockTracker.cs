@@ -291,8 +291,8 @@ internal sealed class V1StockTracker
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.2";
-    private const string PublicVersionLabel = "StatTrack v1.0.2";
+    private const string PublicVersionNumber = "1.0.3";
+    private const string PublicVersionLabel = "StatTrack v1.0.3";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;

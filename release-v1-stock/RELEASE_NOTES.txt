@@ -1,13 +1,16 @@
-StatTrack v1.0.2
+StatTrack v1.0.3
 
-Added a new previous valid run column to NoteSplit.
-Previous valid run only comes from non-practice, non-bot runs.
-Restarting mid-run now preserves the section results you actually reached, while unreached sections stay --.
-Current run, previous run, and PB are now easier to compare side by side as a result.
+Fixed the GitHub update checker on the main menu. Older StatTrack builds should now correctly detect when a newer release is available.
 
-Color updates
+Tracked section exports now include raw value-only counter files for OBS:
+- attempts.txt
+- fcs_past.txt
+- killed_the_run.txt
 
-Previous-run misses now stay red instead of white.
-PB misses now stay red instead of white.
-Any 0 in the current run or previous run is now gold.
-PB 0 stays white so it remains visually distinct.
+Tracked section folders no longer export:
+- start_time.txt
+- tracked.txt
+
+summary.txt is still included and remains the formatted multi-line section summary.
+
+For the safest install, use StatTrack on a clean Clone Hero copy instead of installing over an already modded folder.
