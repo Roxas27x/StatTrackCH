@@ -510,26 +510,19 @@ internal sealed class V1StockTracker
     {
         try
         {
-            TrySetStaticNetProperty(typeof(ServicePointManager), "SecurityProtocol", SecurityProtocolType.Tls12);
-
-            var request = (HttpWebRequest)WebRequest.Create(GitHubLatestReleaseApiUrl);
-            request.Method = "GET";
-            TrySetNetProperty(request, "Accept", GitHubApiAcceptHeader);
-            TrySetNetProperty(request, "UserAgent", $"StatTrackCH/{PublicVersionNumber}");
-            TrySetNetProperty(request, "Timeout", GitHubReleaseCheckTimeoutMs);
-            TrySetNetProperty(request, "ReadWriteTimeout", GitHubReleaseCheckTimeoutMs);
-            TrySetNetProperty(request, "AutomaticDecompression", DecompressionMethods.GZip | DecompressionMethods.Deflate);
-
-            using var response = (HttpWebResponse)request.GetResponse();
-            using var stream = response.GetResponseStream();
-            if (stream == null)
+            string? failureDetail = null;
+            string? json = TryFetchLatestReleaseJsonViaCurl(ref failureDetail);
+            if (string.IsNullOrWhiteSpace(json))
             {
-                return;
+                json = TryFetchLatestReleaseJsonViaWebRequest(ref failureDetail);
             }
 
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            string json = reader.ReadToEnd();
-            GitHubLatestReleaseResponse? release = JsonConvert.DeserializeObject<GitHubLatestReleaseResponse>(json);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                throw new InvalidOperationException(failureDetail ?? "Unable to fetch latest release metadata.");
+            }
+
+            GitHubLatestReleaseResponse? release = JsonConvert.DeserializeObject<GitHubLatestReleaseResponse>(json!);
             string? latestVersionLabel = ExtractReleaseVersionLabel(release?.TagName, release?.Name);
             Version? currentVersion = TryParseComparableVersion(PublicVersionNumber);
             Version? latestVersion = TryParseComparableVersion(latestVersionLabel);
@@ -551,6 +544,100 @@ internal sealed class V1StockTracker
         catch (Exception ex)
         {
             StockTrackerLog.Write($"ReleaseCheckFailure | {ex.GetType().Name} | {ex.Message}");
+        }
+    }
+
+    private static string? TryFetchLatestReleaseJsonViaCurl(ref string? failureDetail)
+    {
+        try
+        {
+            string outputPath = Path.Combine(Path.GetTempPath(), "stattrack-release-check-out.json");
+            string errorPath = Path.Combine(Path.GetTempPath(), "stattrack-release-check-err.txt");
+
+            TryDeleteFile(outputPath);
+            TryDeleteFile(errorPath);
+
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments =
+                    "/c " +
+                    $"curl.exe --silent --show-error --location --max-time {Math.Max(1, GitHubReleaseCheckTimeoutMs / 1000)} " +
+                    $"--header \"Accept: {GitHubApiAcceptHeader}\" " +
+                    $"--header \"User-Agent: StatTrackCH/{PublicVersionNumber}\" " +
+                    $"\"{GitHubLatestReleaseApiUrl}\" " +
+                    $"> \"{outputPath}\" 2> \"{errorPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            process.Start();
+            if (!process.WaitForExit(GitHubReleaseCheckTimeoutMs + 1000))
+            {
+                failureDetail = "curl timed out while checking for updates.";
+                return null;
+            }
+
+            string output = File.Exists(outputPath) ? File.ReadAllText(outputPath) : string.Empty;
+            string error = File.Exists(errorPath) ? File.ReadAllText(errorPath) : string.Empty;
+            if (process.ExitCode != 0)
+            {
+                failureDetail = string.IsNullOrWhiteSpace(error)
+                    ? $"curl exited with code {process.ExitCode}."
+                    : $"curl exited with code {process.ExitCode}: {error.Trim()}";
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                failureDetail = "curl returned an empty response while checking for updates.";
+                return null;
+            }
+
+            return output;
+        }
+        catch (Exception ex)
+        {
+            failureDetail = $"curl unavailable: {ex.GetType().Name} | {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            TryDeleteFile(Path.Combine(Path.GetTempPath(), "stattrack-release-check-out.json"));
+            TryDeleteFile(Path.Combine(Path.GetTempPath(), "stattrack-release-check-err.txt"));
+        }
+    }
+
+    private static string? TryFetchLatestReleaseJsonViaWebRequest(ref string? failureDetail)
+    {
+        try
+        {
+            TrySetStaticNetProperty(typeof(ServicePointManager), "SecurityProtocol", SecurityProtocolType.Tls12);
+
+            var request = (HttpWebRequest)WebRequest.Create(GitHubLatestReleaseApiUrl);
+            request.Method = "GET";
+            TrySetNetProperty(request, "Accept", GitHubApiAcceptHeader);
+            TrySetNetProperty(request, "UserAgent", $"StatTrackCH/{PublicVersionNumber}");
+            TrySetNetProperty(request, "Timeout", GitHubReleaseCheckTimeoutMs);
+            TrySetNetProperty(request, "ReadWriteTimeout", GitHubReleaseCheckTimeoutMs);
+            TrySetNetProperty(request, "AutomaticDecompression", DecompressionMethods.GZip | DecompressionMethods.Deflate);
+
+            using var response = (HttpWebResponse)request.GetResponse();
+            using var stream = response.GetResponseStream();
+            if (stream == null)
+            {
+                failureDetail = "WebRequest returned no response stream.";
+                return null;
+            }
+
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+        catch (Exception ex)
+        {
+            failureDetail = $"WebRequest failed: {ex.GetType().Name} | {ex.Message}";
+            return null;
         }
     }
 
@@ -704,6 +791,20 @@ internal sealed class V1StockTracker
         try
         {
             type.GetProperty(propertyName, BindingFlags.Static | BindingFlags.Public)?.SetValue(null, value, null);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
         catch
         {
@@ -6990,9 +7091,12 @@ internal sealed class V1StockTracker
                 string sectionDir = Path.Combine(sectionsDir, SanitizeFileName(sectionExportName));
                 Directory.CreateDirectory(sectionDir);
                 WriteObsText(Path.Combine(sectionDir, "name.txt"), FormatObsValue("Section Name", sectionExportName));
-                WriteObsText(Path.Combine(sectionDir, "tracked.txt"), FormatObsValue("Tracked", section.Tracked ? "True" : "False"));
-                WriteObsText(Path.Combine(sectionDir, "start_time.txt"), FormatObsValue("Start Time", section.StartTime.ToString("0.###", CultureInfo.InvariantCulture)));
                 WriteObsText(Path.Combine(sectionDir, "summary.txt"), BuildSectionSummary(section));
+                WriteObsText(Path.Combine(sectionDir, "attempts.txt"), section.Attempts.ToString(CultureInfo.InvariantCulture));
+                WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), section.RunsPast.ToString(CultureInfo.InvariantCulture));
+                WriteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), section.KilledTheRun.ToString(CultureInfo.InvariantCulture));
+                DeleteObsText(Path.Combine(sectionDir, "tracked.txt"));
+                DeleteObsText(Path.Combine(sectionDir, "start_time.txt"));
             }
         }
         else
