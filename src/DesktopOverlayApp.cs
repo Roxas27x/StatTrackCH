@@ -962,8 +962,9 @@ internal static class NoteSplitRenderer
             float rowHeight = Math.Min(28f, Math.Max(11f, listRect.Height / Math.Max(1, rows.Count)));
             float nameFontSize = Clamp(rowHeight * 0.58f, 9f, 15f);
             float valueFontSize = Clamp(rowHeight * 0.62f, 10f, 16f);
-            float splitColumnWidth = 56f;
-            float bestColumnWidth = 60f;
+            float previousColumnWidth = 56f;
+            float currentColumnWidth = 56f;
+            float bestColumnWidth = 56f;
             GraphicsState clipState = graphics.Save();
             graphics.SetClip(listRect);
             for (int i = 0; i < rows.Count; i++)
@@ -978,20 +979,26 @@ internal static class NoteSplitRenderer
                 graphics.FillRectangle(rowBrush, rowRect);
                 graphics.DrawLine(rowDividerPen, rowRect.X, rowRect.Bottom - 1f, rowRect.Right, rowRect.Bottom - 1f);
 
-                RectangleF nameRect = new RectangleF(rowRect.X + 10f, rowRect.Y + 1f, Math.Max(40f, rowRect.Width - splitColumnWidth - bestColumnWidth - 24f), rowRect.Height - 2f);
-                RectangleF splitRect = new RectangleF(rowRect.Right - bestColumnWidth - splitColumnWidth - 4f, rowRect.Y + 1f, splitColumnWidth, rowRect.Height - 2f);
                 RectangleF bestRect = new RectangleF(rowRect.Right - bestColumnWidth - 8f, rowRect.Y + 1f, bestColumnWidth, rowRect.Height - 2f);
+                RectangleF currentRunRect = new RectangleF(bestRect.X - currentColumnWidth - 4f, rowRect.Y + 1f, currentColumnWidth, rowRect.Height - 2f);
+                RectangleF previousRunRect = new RectangleF(currentRunRect.X - previousColumnWidth - 4f, rowRect.Y + 1f, previousColumnWidth, rowRect.Height - 2f);
+                RectangleF nameRect = new RectangleF(rowRect.X + 10f, rowRect.Y + 1f, Math.Max(40f, previousRunRect.X - rowRect.X - 14f), rowRect.Height - 2f);
                 using var nameFont = CreateFont(style, nameFontSize, row.IsCurrent ? FontStyle.Bold : FontStyle.Regular);
                 using var valueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
                 using var nameBrush = new SolidBrush(Color.White);
-                using var splitBrush = new SolidBrush(GetResultColor(row.ResultKind, row.CurrentRunMissCount));
+                using var previousBrush = new SolidBrush(GetPreviousRunColor(row.PreviousValidRunMissCount));
+                using var currentBrush = new SolidBrush(GetCurrentRunColor(row.ResultKind, row.CurrentRunMissCount));
                 using var bestBrush = new SolidBrush(GetPersonalBestColor(row));
                 using var nameFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter };
                 using var valueFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
                 graphics.DrawString(row.Name ?? string.Empty, nameFont, nameBrush, nameRect, nameFormat);
+                if (row.PreviousValidRunMissCount.HasValue)
+                {
+                    graphics.DrawString(FormatSectionValue(row.PreviousValidRunMissCount.Value), valueFont, previousBrush, previousRunRect, valueFormat);
+                }
                 if (row.CurrentRunMissCount.HasValue)
                 {
-                    graphics.DrawString(FormatSectionValue(row.CurrentRunMissCount.Value), valueFont, splitBrush, splitRect, valueFormat);
+                    graphics.DrawString(FormatSectionValue(row.CurrentRunMissCount.Value), valueFont, currentBrush, currentRunRect, valueFormat);
                 }
 
                 string personalBestText = row.PersonalBestMissCount.HasValue
@@ -1035,7 +1042,7 @@ internal static class NoteSplitRenderer
         using (var previousFont = CreateFont(style, 11f, FontStyle.Regular))
         using (var previousValueFont = CreateFont(style, 12f, FontStyle.Bold))
         using (var labelBrush = new SolidBrush(Color.FromArgb(255, 194, 194, 194)))
-        using (var valueBrush = new SolidBrush(GetResultColor(state.PreviousSectionResultKind, state.PreviousSectionMissCount)))
+        using (var valueBrush = new SolidBrush(GetCurrentRunColor(state.PreviousSectionResultKind, state.PreviousSectionMissCount)))
         using (var leftFormat = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
         using (var rightFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
         {
@@ -1120,12 +1127,17 @@ internal static class NoteSplitRenderer
         return FormatSectionValue(bestMissCount.Value) + " " + overstrumText + " OS";
     }
 
-    private static Color GetResultColor(string? resultKind, int? missCount)
+    private static Color GetCurrentRunColor(string? resultKind, int? missCount)
     {
         const int alpha = 255;
         if (!missCount.HasValue)
         {
             return Color.White;
+        }
+
+        if (missCount.Value == 0)
+        {
+            return Color.FromArgb(alpha, 255, 214, 84);
         }
 
         if (string.Equals(resultKind, OverlayNoteSplitResultKind.PerfectImprovement, StringComparison.Ordinal))
@@ -1153,11 +1165,28 @@ internal static class NoteSplitRenderer
         return Color.White;
     }
 
+    private static Color GetPreviousRunColor(int? missCount)
+    {
+        if (!missCount.HasValue)
+        {
+            return Color.FromArgb(255, 165, 165, 165);
+        }
+
+        return missCount.Value == 0
+            ? Color.FromArgb(255, 255, 214, 84)
+            : Color.FromArgb(255, 236, 86, 86);
+    }
+
     private static Color GetPersonalBestColor(OverlayNoteSplitSectionState row)
     {
-        return row.PersonalBestMissCount.HasValue
+        if (!row.PersonalBestMissCount.HasValue)
+        {
+            return Color.FromArgb(255, 165, 165, 165);
+        }
+
+        return row.PersonalBestMissCount.Value == 0
             ? Color.White
-            : Color.FromArgb(255, 165, 165, 165);
+            : Color.FromArgb(255, 236, 86, 86);
     }
 }
 
@@ -1762,6 +1791,7 @@ internal sealed class OverlayNoteSplitSectionState
     public string? Key { get; set; }
     public string? Name { get; set; }
     public bool IsCurrent { get; set; }
+    public int? PreviousValidRunMissCount { get; set; }
     public int? PersonalBestMissCount { get; set; }
     public int? CurrentRunMissCount { get; set; }
     public string? ResultKind { get; set; }
@@ -1796,7 +1826,7 @@ internal sealed class DesktopOverlayStyle
     public float BorderA { get; set; } = 0.70f;
     public float NoteSplitX { get; set; } = -1f;
     public float NoteSplitY { get; set; } = -1f;
-    public float NoteSplitWidth { get; set; } = 360f;
+    public float NoteSplitWidth { get; set; } = 420f;
     public float NoteSplitHeight { get; set; } = 720f;
     public string NoteSplitFontFamily { get; set; } = DefaultNoteSplitFontFamily;
     public float NoteSplitFontScale { get; set; } = 1f;

@@ -6248,6 +6248,10 @@ internal sealed class V1StockTracker
         bool started = (newSong || !_runState.InRun || startedFromSongSelect) && !restarted;
         bool newRun = started || restarted;
         bool noteSplitEnabled = IsTextExportEnabled(GetEnabledTextExportsSnapshot(), NoteSplitModeExportKey);
+        if (newRun && noteSplitEnabled && _runState.InRun && !newSong && !isPractice)
+        {
+            SnapshotNoteSplitPreviousValidRun(songMemory);
+        }
         if (newRun)
         {
             _runState = new RunState
@@ -6668,6 +6672,45 @@ internal sealed class V1StockTracker
         }
 
         return currentMissedNotes <= 0 && currentOverstrums <= 0 ? 100 : 0;
+    }
+
+    private void SnapshotNoteSplitPreviousValidRun(SongMemory songMemory)
+    {
+        foreach (SectionMemory sectionMemory in songMemory.Sections.Values)
+        {
+            sectionMemory.PreviousValidRunMissCount = null;
+        }
+
+        foreach (KeyValuePair<string, int> pair in BuildPreviousValidNoteSplitRunSnapshot())
+        {
+            EnsureSectionMemory(songMemory, pair.Key).PreviousValidRunMissCount = pair.Value;
+        }
+
+        MarkMemoryDirty();
+    }
+
+    private Dictionary<string, int> BuildPreviousValidNoteSplitRunSnapshot()
+    {
+        var snapshot = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, NoteSplitSectionRunState> pair in _runState.NoteSplitSectionsThisRun)
+        {
+            snapshot[pair.Key] = pair.Value.MissCount;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_runState.NoteSplitCurrentSection))
+        {
+            int missCount = _runState.NoteSplitMissCountsBySectionThisRun.TryGetValue(_runState.NoteSplitCurrentSection, out int trackedMissCount)
+                ? trackedMissCount
+                : 0;
+            if (_runState.PendingNoteSplitMisses > 0)
+            {
+                missCount += _runState.PendingNoteSplitMisses;
+            }
+
+            snapshot[_runState.NoteSplitCurrentSection] = missCount;
+        }
+
+        return snapshot;
     }
 
     private void ResetRunIfNeeded()
@@ -7357,6 +7400,7 @@ internal sealed class V1StockTracker
                 Key = sectionKey,
                 Name = sectionKey,
                 IsCurrent = string.Equals(sectionKey, currentSectionName, StringComparison.Ordinal),
+                PreviousValidRunMissCount = sectionMemory?.PreviousValidRunMissCount,
                 PersonalBestMissCount = sectionMemory?.BestMissCount,
                 CurrentRunMissCount = runState?.MissCount,
                 ResultKind = runState?.ResultKind ?? NoteSplitResultKind.None
@@ -7725,7 +7769,7 @@ public sealed class DesktopOverlayStyleConfig
     public float BorderA { get; set; } = 0.70f;
     public float NoteSplitX { get; set; } = -1f;
     public float NoteSplitY { get; set; } = -1f;
-    public float NoteSplitWidth { get; set; } = 360f;
+    public float NoteSplitWidth { get; set; } = 420f;
     public float NoteSplitHeight { get; set; } = 720f;
     public string NoteSplitFontFamily { get; set; } = "Segoe UI";
     public float NoteSplitFontScale { get; set; } = 1f;
@@ -7794,6 +7838,7 @@ public sealed class SectionMemory
     public int RunsPast { get; set; }
     public int Attempts { get; set; }
     public int KilledTheRun { get; set; }
+    public int? PreviousValidRunMissCount { get; set; }
     public int? BestMissCount { get; set; }
 }
 
@@ -7851,6 +7896,7 @@ public sealed class NoteSplitSectionState
     public string Key { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool IsCurrent { get; set; }
+    public int? PreviousValidRunMissCount { get; set; }
     public int? PersonalBestMissCount { get; set; }
     public int? CurrentRunMissCount { get; set; }
     public string ResultKind { get; set; } = NoteSplitResultKind.None;
