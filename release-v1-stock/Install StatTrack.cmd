@@ -33,6 +33,7 @@ set "STOCK_DLL=%RELEASE_ROOT%StatTrack.dll"
 set "PATCHER_EXE=%RELEASE_ROOT%V1StockAssemblyPatcher.exe"
 set "DESKTOP_OVERLAY_EXE=%RELEASE_ROOT%StatTrackOverlay.exe"
 set "RUNTIME_CHECKER_EXE=%RELEASE_ROOT%V1RuntimeCompatibilityChecker.exe"
+set "PATCHED_ASSET=%RELEASE_ROOT%sharedassets1.assets.patched"
 for %%I in ("%DEFAULT_GAME_DIR%") do set "DEFAULT_GAME_DIR=%%~fI"
 
 echo.
@@ -41,7 +42,7 @@ echo -------------------
 echo Choose the Clone Hero folder that contains "Clone Hero.exe".
 echo.
 
-for %%F in ("%STOCK_DLL%" "%PATCHER_EXE%" "%DESKTOP_OVERLAY_EXE%" "%RUNTIME_CHECKER_EXE%") do (
+for %%F in ("%STOCK_DLL%" "%PATCHER_EXE%" "%DESKTOP_OVERLAY_EXE%" "%RUNTIME_CHECKER_EXE%" "%PATCHED_ASSET%") do (
     if not exist "%%~fF" (
         echo Missing release file: %%~fF
         goto fail
@@ -54,16 +55,28 @@ if errorlevel 2 goto done
 if errorlevel 1 goto fail
 
 set "MANAGED_DIR=%GAME_DIR%\Clone Hero_Data\Managed"
+set "DATA_DIR=%GAME_DIR%\Clone Hero_Data"
 set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
 set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
 set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
+set "TARGET_ASSET=%DATA_DIR%\sharedassets1.assets"
+set "BACKUP_ASSET=%DATA_DIR%\sharedassets1.assets.stocktracker.bak"
 
 if not exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%ASSEMBLY_PATH%" "%BACKUP_ASSEMBLY_PATH%" >nul
     if errorlevel 1 (
         echo Failed to create backup:
         echo %BACKUP_ASSEMBLY_PATH%
+        goto fail
+    )
+)
+
+if not exist "%BACKUP_ASSET%" (
+    copy /y "%TARGET_ASSET%" "%BACKUP_ASSET%" >nul
+    if errorlevel 1 (
+        echo Failed to create backup:
+        echo %BACKUP_ASSET%
         goto fail
     )
 )
@@ -102,10 +115,18 @@ if errorlevel 1 (
     goto fail
 )
 
+copy /y "%PATCHED_ASSET%" "%TARGET_ASSET%" >nul
+if errorlevel 1 (
+    echo Failed to install patched animated menu asset into:
+    echo %TARGET_ASSET%
+    goto fail
+)
+
 echo.
 echo StatTrack installed successfully.
 echo Game folder: %GAME_DIR%
 echo Backup created at: %BACKUP_ASSEMBLY_PATH%
+echo Asset backup created at: %BACKUP_ASSET%
 echo.
 echo Launch "Clone Hero.exe" from that folder and use Home / Ctrl+O / F8 to open the overlay.
 echo.

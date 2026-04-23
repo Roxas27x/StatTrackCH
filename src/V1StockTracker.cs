@@ -131,6 +131,28 @@ public static class StockTrackerHooks
         }
     }
 
+    public static void OnSongSelectUpdate(object songSelect)
+    {
+        try
+        {
+            if (songSelect == null)
+            {
+                return;
+            }
+
+            lock (Sync)
+            {
+                Tracker.EnsureSongSelectReady(songSelect);
+            }
+
+            EnsureOverlayHost();
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+        }
+    }
+
     public static void OnOverlayUpdate()
     {
         try
@@ -620,6 +642,11 @@ internal sealed class V1StockTracker
             EnsureDesktopOverlayStarted();
         }
 
+        if (!state.IsInSong)
+        {
+            ApplyAnimatedMenuTint();
+        }
+
         ExportState(state);
     }
 
@@ -631,6 +658,15 @@ internal sealed class V1StockTracker
         FlushPendingMenuPersistence();
         EnsureReleaseCheckStarted();
         ApplyMainMenuVersionText(mainMenu);
+        ApplyAnimatedMenuTint();
+    }
+
+    public void EnsureSongSelectReady(object songSelect)
+    {
+        EnsureInitialized(songSelect.GetType().Assembly);
+        _gameManagerType ??= songSelect.GetType().Assembly.GetType("GameManager");
+        CacheReflection();
+        FlushPendingMenuPersistence();
         ApplyAnimatedMenuTint();
     }
 
@@ -904,6 +940,8 @@ internal sealed class V1StockTracker
             return;
         }
 
+        HideExistingAnimatedMenuWispOverlay(rawImage);
+
         RawImage? overlayImage = EnsureAnimatedMenuTintOverlay(rawImage);
         if (overlayImage == null)
         {
@@ -937,7 +975,7 @@ internal sealed class V1StockTracker
         }
 
         HideAnimatedMenuTintOverlay(_animatedMenuWispOverlayImage);
-        ApplyAnimatedMenuWispShaderGlobals(useConfig: true);
+        ApplyAnimatedMenuWispShaderGlobals(useConfig: SupportsAnimatedMenuWispRenderer());
 
         rawImage.color = Color.white;
         rawImage.SetVerticesDirty();
@@ -1051,6 +1089,11 @@ internal sealed class V1StockTracker
         return Mathf.Lerp(0.68f, 1.55f, Mathf.Clamp01(sliderValue));
     }
 
+    private static bool SupportsAnimatedMenuWispRenderer()
+    {
+        return string.Equals(SystemInfo.graphicsDeviceType.ToString(), "Direct3D11", StringComparison.OrdinalIgnoreCase);
+    }
+
     private RawImage? EnsureAnimatedMenuTintOverlay(RawImage rawImage)
     {
         if (_animatedMenuTintOverlayImage != null)
@@ -1080,6 +1123,7 @@ internal sealed class V1StockTracker
 
         rectTransform.anchorMin = Vector2.zero;
         rectTransform.anchorMax = Vector2.one;
+        rectTransform.pivot = new Vector2(0.5f, 0.5f);
         rectTransform.offsetMin = Vector2.zero;
         rectTransform.offsetMax = Vector2.zero;
         rectTransform.anchoredPosition = Vector2.zero;
@@ -1220,6 +1264,31 @@ internal sealed class V1StockTracker
         return overlayImage;
     }
 
+    private void HideExistingAnimatedMenuWispOverlay(RawImage rawImage)
+    {
+        RawImage? overlayImage = FindAnimatedMenuWispOverlay(rawImage);
+        if (overlayImage == null)
+        {
+            return;
+        }
+
+        HideAnimatedMenuTintOverlay(overlayImage);
+        _animatedMenuWispOverlayImage = overlayImage;
+    }
+
+    private static RawImage? FindAnimatedMenuWispOverlay(RawImage rawImage)
+    {
+        Canvas? canvas = rawImage.GetComponentInParent<Canvas>();
+        if (canvas == null)
+        {
+            return null;
+        }
+
+        Transform overlayParent = rawImage.transform.parent ?? canvas.transform;
+        Transform? existingTransform = overlayParent.Find(AnimatedMenuWispOverlayObjectName);
+        return existingTransform?.GetComponent<RawImage>();
+    }
+
     private static void ApplyAnimatedMenuTintOverlay(RawImage overlayImage, Color color)
     {
         overlayImage.color = color;
@@ -1232,12 +1301,18 @@ internal sealed class V1StockTracker
     {
         overlayImage.texture = EnsureAnimatedMenuWispTexture();
         float clampedSize = Mathf.Clamp01(size);
-        float appliedAlpha = Mathf.Clamp01((0.28f + (color.a * 1.1f)) * Mathf.Lerp(0.9f, 1.25f, clampedSize));
+        float appliedAlpha = Mathf.Clamp01((0.16f + (color.a * 0.68f)) * Mathf.Lerp(0.95f, 1.12f, clampedSize));
         overlayImage.color = new Color(color.r, color.g, color.b, appliedAlpha);
-        float uvWidth = Mathf.Lerp(3.2f, 0.3f, clampedSize);
-        float uvHeight = Mathf.Lerp(2.5f, 0.38f, clampedSize);
         float time = Time.unscaledTime;
-        overlayImage.uvRect = new Rect(time * 0.018f, time * 0.011f, uvWidth, uvHeight);
+        overlayImage.uvRect = new Rect(0f, 0f, 1f, 1f);
+        if (overlayImage.rectTransform != null)
+        {
+            float overlayScale = Mathf.Lerp(1.12f, 1.95f, clampedSize);
+            float driftX = Mathf.Sin(time * 0.07f) * (overlayScale - 1f) * 180f;
+            float driftY = Mathf.Cos((time * 0.053f) + 1.1f) * (overlayScale - 1f) * 120f;
+            overlayImage.rectTransform.localScale = new Vector3(overlayScale, overlayScale, 1f);
+            overlayImage.rectTransform.anchoredPosition = new Vector2(driftX, driftY);
+        }
         overlayImage.enabled = true;
         overlayImage.SetVerticesDirty();
         overlayImage.SetMaterialDirty();
@@ -1253,6 +1328,11 @@ internal sealed class V1StockTracker
         overlayImage.enabled = false;
         overlayImage.color = Color.clear;
         overlayImage.uvRect = new Rect(0f, 0f, 1f, 1f);
+        if (overlayImage.rectTransform != null)
+        {
+            overlayImage.rectTransform.localScale = Vector3.one;
+            overlayImage.rectTransform.anchoredPosition = Vector2.zero;
+        }
         overlayImage.SetVerticesDirty();
         overlayImage.SetMaterialDirty();
     }
@@ -1734,6 +1814,7 @@ internal sealed class V1StockTracker
                     ApplyAnimatedMenuTint();
                 }
 
+                bool supportsAnimatedMenuWisps = SupportsAnimatedMenuWispRenderer();
                 bool previousGuiEnabled = GUI.enabled;
                 GUI.enabled = updatedAnimatedMenuTintEnabled;
                 bool animatedMenuTintClicked = GUILayout.Toggle(false, new GUIContent("ANIMATED MENU COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
@@ -1743,7 +1824,7 @@ internal sealed class V1StockTracker
                     OpenAnimatedMenuColorPicker(rect);
                 }
 
-                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                GUI.enabled = updatedAnimatedMenuTintEnabled && supportsAnimatedMenuWisps;
                 bool animatedMenuWispClicked = GUILayout.Toggle(false, new GUIContent("WISP COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
                 GUI.enabled = previousGuiEnabled;
                 if (animatedMenuWispClicked)
@@ -1753,7 +1834,11 @@ internal sealed class V1StockTracker
 
                 if (updatedAnimatedMenuTintEnabled)
                 {
-                    RenderAnimatedMenuTintControls(contentRect.width - 24f);
+                    RenderAnimatedMenuTintControls(contentRect.width - 24f, supportsAnimatedMenuWisps);
+                    if (!supportsAnimatedMenuWisps)
+                    {
+                        GUILayout.Label("Wisp controls currently require DX11.", GUILayout.Width(contentRect.width - 24f));
+                    }
                 }
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
                 RenderOverlayEditorTransparencyControls(overlayConfig, contentRect.width - 24f);
@@ -1822,6 +1907,7 @@ internal sealed class V1StockTracker
                     ApplyAnimatedMenuTint();
                 }
 
+                bool supportsAnimatedMenuWisps = SupportsAnimatedMenuWispRenderer();
                 bool previousGuiEnabled = GUI.enabled;
                 GUI.enabled = updatedAnimatedMenuTintEnabled;
                 bool animatedMenuTintClicked = GUILayout.Toggle(false, new GUIContent("ANIMATED MENU COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
@@ -1831,7 +1917,7 @@ internal sealed class V1StockTracker
                     OpenAnimatedMenuColorPicker(rect);
                 }
 
-                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                GUI.enabled = updatedAnimatedMenuTintEnabled && supportsAnimatedMenuWisps;
                 bool animatedMenuWispClicked = GUILayout.Toggle(false, new GUIContent("WISP COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
                 GUI.enabled = previousGuiEnabled;
                 if (animatedMenuWispClicked)
@@ -1841,7 +1927,11 @@ internal sealed class V1StockTracker
 
                 if (updatedAnimatedMenuTintEnabled)
                 {
-                    RenderAnimatedMenuTintControls(contentRect.width - 24f);
+                    RenderAnimatedMenuTintControls(contentRect.width - 24f, supportsAnimatedMenuWisps);
+                    if (!supportsAnimatedMenuWisps)
+                    {
+                        GUILayout.Label("Wisp controls currently require DX11.", GUILayout.Width(contentRect.width - 24f));
+                    }
                 }
                 GUILayout.Label(string.Empty, GUILayout.Height(8f));
                 bool showTrackedSections = HasAnyTrackedSectionExportEnabled(songConfig) || _overlayEditorVisible;
@@ -2781,7 +2871,7 @@ internal sealed class V1StockTracker
             false);
     }
 
-    private void RenderAnimatedMenuTintControls(float width)
+    private void RenderAnimatedMenuTintControls(float width, bool includeWispControls)
     {
         GUILayout.Label("Animated Menu Layers", GUILayout.Width(width));
 
@@ -2799,13 +2889,16 @@ internal sealed class V1StockTracker
             value => _config.AnimatedMenuTintCanvasOverlayStrength = value,
             null);
 
-        float wispSize = Mathf.Clamp01(_config.AnimatedMenuWispSize);
-        RenderAnimatedMenuSliderCard(
-            "Wisp Size",
-            width,
-            wispSize,
-            value => _config.AnimatedMenuWispSize = value,
-            null);
+        if (includeWispControls)
+        {
+            float wispSize = Mathf.Clamp01(_config.AnimatedMenuWispSize);
+            RenderAnimatedMenuSliderCard(
+                "Wisp Size",
+                width,
+                wispSize,
+                value => _config.AnimatedMenuWispSize = value,
+                null);
+        }
     }
 
     private void RenderAnimatedMenuSliderCard(string label, float width, float value, Action<float> applyValue, string? description, float min = 0f, float max = 1f, bool applyAnimatedMenuTint = true)
@@ -3444,10 +3537,10 @@ internal sealed class V1StockTracker
             return _animatedMenuWispTexture;
         }
 
-        const int size = 256;
+        const int size = 512;
         Texture2D texture = new Texture2D(size, size, TextureFormat.ARGB32, false)
         {
-            wrapMode = TextureWrapMode.Repeat,
+            wrapMode = TextureWrapMode.Clamp,
             filterMode = FilterMode.Bilinear
         };
 
@@ -3484,7 +3577,9 @@ internal sealed class V1StockTracker
 
         float wisps = Mathf.Clamp01((body * 0.75f) + (body * strands * 1.15f));
         wisps = Mathf.SmoothStep(0.02f, 0.94f, wisps);
-        return Mathf.Clamp01(wisps);
+        float edgeFadeX = Mathf.SmoothStep(0f, 0.16f, u) * Mathf.SmoothStep(0f, 0.16f, 1f - u);
+        float edgeFadeY = Mathf.SmoothStep(0f, 0.16f, v) * Mathf.SmoothStep(0f, 0.16f, 1f - v);
+        return Mathf.Clamp01(wisps * edgeFadeX * edgeFadeY);
     }
 
     private static float FractalTileableNoise(float u, float v, int basePeriod, int octaves)

@@ -20,8 +20,10 @@ Recommended setup
 What the installer does
 - checks that the selected folder is a real Clone Hero v1 install
 - creates a backup of "Clone Hero_Data\Managed\Assembly-CSharp.dll"
+- creates a backup of "Clone Hero_Data\sharedassets1.assets"
 - copies in the tracker files
 - patches Assembly-CSharp.dll so the mod loads automatically
+- installs the animated menu asset patch used by StatTrack's menu tint and wisp controls
 
 Overlay hotkeys
 - Home
