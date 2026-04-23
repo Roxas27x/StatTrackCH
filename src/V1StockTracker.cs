@@ -14,6 +14,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace CloneHeroSectionTracker.V1Stock
 {
@@ -142,6 +143,27 @@ public static class StockTrackerHooks
         catch (Exception ex)
         {
             StockTrackerLog.Write(ex);
+        }
+    }
+
+    public static bool ShouldBlockMainMenuInput(object mainMenu)
+    {
+        try
+        {
+            if (mainMenu == null)
+            {
+                return false;
+            }
+
+            lock (Sync)
+            {
+                return Tracker.ShouldBlockMainMenuInput(mainMenu);
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+            return false;
         }
     }
 
@@ -280,6 +302,12 @@ internal sealed class V1StockTracker
 {
     private const BindingFlags AnyInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private const BindingFlags AnyStatic = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+    private static readonly int AnimatedMenuWispGlobalColorRId = Shader.PropertyToID(AnimatedMenuWispGlobalColorRName);
+    private static readonly int AnimatedMenuWispGlobalColorGId = Shader.PropertyToID(AnimatedMenuWispGlobalColorGName);
+    private static readonly int AnimatedMenuWispGlobalColorBId = Shader.PropertyToID(AnimatedMenuWispGlobalColorBName);
+    private static readonly int AnimatedMenuWispGlobalColorAId = Shader.PropertyToID(AnimatedMenuWispGlobalColorAName);
+    private static readonly int AnimatedMenuWispGlobalSizeId = Shader.PropertyToID(AnimatedMenuWispGlobalSizeName);
+    private static readonly int AnimatedMenuWispGlobalEnabledId = Shader.PropertyToID(AnimatedMenuWispGlobalEnabledName);
     private static readonly bool VerboseLoggingEnabled = false;
     private const float StateExportIntervalSeconds = 0.25f;
     private const float ObsExportIntervalSeconds = 0.25f;
@@ -293,6 +321,19 @@ internal sealed class V1StockTracker
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;
+    private const string MenuBackgroundSettingName = "menu_background";
+    private const int AnimatedMenuBackgroundSettingValue = 0;
+    private const string AnimatedMenuColorPickerTargetKey = "menu:animated";
+    private const string AnimatedMenuWispColorPickerTargetKey = "menu:wisps";
+    private const string AnimatedMenuTintOverlayObjectName = "StatTrackAnimatedMenuTint";
+    private const string AnimatedMenuCanvasTintOverlayObjectName = "StatTrackAnimatedMenuCanvasTint";
+    private const string AnimatedMenuWispGlobalColorRName = "_StatTrackMenuWispColorR";
+    private const string AnimatedMenuWispGlobalColorGName = "_StatTrackMenuWispColorG";
+    private const string AnimatedMenuWispGlobalColorBName = "_StatTrackMenuWispColorB";
+    private const string AnimatedMenuWispGlobalColorAName = "_StatTrackMenuWispColorA";
+    private const string AnimatedMenuWispGlobalSizeName = "_StatTrackMenuWispSize";
+    private const string AnimatedMenuWispGlobalEnabledName = "_StatTrackMenuWispEnabled";
+    private const string AnimatedMenuWispOverlayObjectName = "StatTrackAnimatedMenuWisps";
 
     private const string GlobalVariablesTypeName = "GlobalVariables";
     private const string ActiveChartFieldName = "\u02B4\u02BC\u02BF\u02BC\u02BA\u02B9\u02B8\u02B2\u02BD\u02BE\u02BD";
@@ -345,6 +386,7 @@ internal sealed class V1StockTracker
     private bool _configDirty;
     private int _memoryVersion;
     private int _configVersion;
+    private int _exportTemplateVersion;
     private int _sectionMemoryVersion;
     private int _sectionConfigVersion;
     private int _overlayConfigVersion;
@@ -371,6 +413,7 @@ internal sealed class V1StockTracker
     private Type? _globalVariablesType;
     private Type? _basePlayerType;
     private Type? _gameSettingType;
+    private Type? _blackMenuType;
     private FieldInfo? _mainMenuVersionLabelField;
     private FieldInfo? _playersField;
     private FieldInfo? _mainPlayerField;
@@ -396,6 +439,8 @@ internal sealed class V1StockTracker
     private PropertyInfo? _gameSettingCurrentValueProperty;
     private PropertyInfo? _gameSettingPercentStringProperty;
     private FieldInfo? _songSpeedSettingField;
+    private FieldInfo? _menuBackgroundSettingField;
+    private FieldInfo? _blackMenuRawImageField;
     private MethodInfo? _chartSectionsMethod;
     private MethodInfo? _chartSectionTimeMethod;
     private FieldInfo? _chartNamedSectionsField;
@@ -443,16 +488,38 @@ internal sealed class V1StockTracker
     private bool _overlayColorPickerDragging;
     private string? _lastWidgetColorClickKey;
     private float _lastWidgetColorClickAt = -999f;
-    private bool _overlayEditorTransparencyDragging;
+    private string? _overlayEditorActiveSliderKey;
     private Texture2D? _overlayColorWheelTexture;
     private float _overlayColorWheelTextureValue = -1f;
     private Texture2D? _overlayEditorPanelTexture;
     private float _overlayEditorPanelTextureAlpha = -1f;
     private int _overlayEditorPanelTextureWidth;
     private int _overlayEditorPanelTextureHeight;
+    private Texture2D? _overlayExportTemplatePanelTexture;
+    private int _overlayExportTemplatePanelTextureWidth;
+    private int _overlayExportTemplatePanelTextureHeight;
     private Texture2D? _overlaySliderTrackTexture;
+    private int _overlaySliderTrackTextureWidth;
+    private int _overlaySliderTrackTextureHeight;
     private Texture2D? _overlaySliderFillTexture;
+    private int _overlaySliderFillTextureWidth;
+    private int _overlaySliderFillTextureHeight;
     private Texture2D? _overlaySliderKnobTexture;
+    private Texture2D? _overlaySliderCardTexture;
+    private int _overlaySliderCardTextureWidth;
+    private int _overlaySliderCardTextureHeight;
+    private Texture2D? _overlaySliderWellTexture;
+    private int _overlaySliderWellTextureWidth;
+    private int _overlaySliderWellTextureHeight;
+    private Texture2D? _overlaySliderTitleTexture;
+    private int _overlaySliderTitleTextureWidth;
+    private int _overlaySliderTitleTextureHeight;
+    private Texture2D? _overlaySliderValueTexture;
+    private int _overlaySliderValueTextureWidth;
+    private int _overlaySliderValueTextureHeight;
+    private Texture2D? _overlaySliderDividerTexture;
+    private Texture2D? _animatedMenuOnGuiOverlayTexture;
+    private Color _animatedMenuOnGuiOverlayTextureColor = new(-1f, -1f, -1f, -1f);
     private readonly Dictionary<string, Texture2D> _resizeCornerTextureCache = new();
     private readonly EnabledTextExportSnapshot _disabledTextExportSnapshot = new();
     private EnabledTextExportSnapshot _enabledTextExportSnapshot = new();
@@ -468,6 +535,22 @@ internal sealed class V1StockTracker
     private string? _overlayResetConfirmKey;
     private float _overlayResetConfirmExpiresAt;
     private float _wipeAllDataConfirmExpiresAt;
+    private bool _exportTemplateEditorVisible;
+    private Vector2 _exportTemplateEditorListScroll;
+    private Vector2 _exportTemplateEditorTokenScroll;
+    private Vector2 _exportTemplateEditorPreviewScroll;
+    private Vector2 _exportTemplateEditorTextScroll;
+    private string? _selectedExportTemplateId;
+    private string? _exportTemplateEditorActiveTemplateId;
+    private int _exportTemplateEditorActiveLineIndex;
+    private int _exportTemplateEditorCursorIndex;
+    private readonly Dictionary<string, string> _exportTemplateEditorDrafts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CompiledExportTemplate> _compiledExportTemplates = new(StringComparer.Ordinal);
+    private int _compiledExportTemplatesVersion = -1;
+    private readonly Dictionary<string, CompiledExportTemplate> _workerCompiledExportTemplates = new(StringComparer.Ordinal);
+    private int _workerCompiledExportTemplatesVersion = -1;
+    private readonly object _exportTemplateLogSync = new();
+    private readonly Dictionary<string, string> _loggedInvalidTemplateSources = new(StringComparer.Ordinal);
     private Process? _desktopOverlayProcess;
     private float _lastDesktopOverlayCheckAt = -999f;
     private bool _desktopOverlayLaunchFailed;
@@ -488,10 +571,17 @@ internal sealed class V1StockTracker
     private const float OverlayWidgetDefaultWidth = 300f;
     private const float OverlayWidgetDefaultHeight = 90f;
     private const int OverlayWidgetResizeModeVersion = 2;
+    private static readonly PropertyInfo? GuiPixelsPerPointProperty = typeof(GUIUtility).GetProperty("pixelsPerPoint", BindingFlags.Public | BindingFlags.Static);
     private GUIStyle? _widgetTitleStyle;
     private GUIStyle? _widgetContentStyle;
     private GUIStyle? _widgetSectionAttemptsStyle;
     private GUIStyle? _widgetSectionEmphasisStyle;
+    private RawImage? _animatedMenuRawImage;
+    private RawImage? _animatedMenuTintOverlayImage;
+    private RawImage? _animatedMenuCanvasTintOverlayImage;
+    private RawImage? _animatedMenuWispOverlayImage;
+    private Texture2D? _animatedMenuWispTexture;
+    private bool _animatedMenuTintApplied;
 
     public void Tick(object gameManager)
     {
@@ -515,11 +605,13 @@ internal sealed class V1StockTracker
             {
                 _config = LoadJson(_configPath, _config);
                 RefreshMergedDesktopOverlayStyle();
+                NormalizeLoadedExportTemplateOverrides();
                 _configWriteSnapshotRequiresFullRefresh = true;
                 _dirtyConfigSongKeys.Clear();
                 _overlayConfigVersion++;
                 _enabledTextExportsVersion++;
                 _enabledTextExportSnapshotVersion = -1;
+                _exportTemplateVersion++;
             }
         }
 
@@ -539,6 +631,12 @@ internal sealed class V1StockTracker
         FlushPendingMenuPersistence();
         EnsureReleaseCheckStarted();
         ApplyMainMenuVersionText(mainMenu);
+        ApplyAnimatedMenuTint();
+    }
+
+    public bool ShouldBlockMainMenuInput(object mainMenu)
+    {
+        return _overlayEditorVisible && _exportTemplateEditorVisible;
     }
 
     private void EnsureReleaseCheckStarted()
@@ -767,6 +865,398 @@ internal sealed class V1StockTracker
         return versionText;
     }
 
+    private void ApplyAnimatedMenuTint()
+    {
+        bool shouldApplyTint = IsAnimatedMenuTintEnabled();
+        if (!shouldApplyTint)
+        {
+            if (_animatedMenuTintApplied)
+            {
+                HideAnimatedMenuTintOverlay(_animatedMenuTintOverlayImage);
+                HideAnimatedMenuTintOverlay(_animatedMenuCanvasTintOverlayImage);
+                HideAnimatedMenuTintOverlay(_animatedMenuWispOverlayImage);
+                if (_animatedMenuRawImage != null)
+                {
+                    _animatedMenuRawImage.color = Color.white;
+                    Material? rawMaterial = _animatedMenuRawImage.material;
+                    if (rawMaterial != null && rawMaterial.HasProperty("_Color"))
+                    {
+                        rawMaterial.SetColor("_Color", new Color(1f, 1f, 1f, 0f));
+                    }
+                    _animatedMenuRawImage.SetVerticesDirty();
+                    _animatedMenuRawImage.SetMaterialDirty();
+                }
+            }
+
+            ApplyAnimatedMenuWispShaderGlobals(useConfig: false);
+
+            _animatedMenuTintApplied = false;
+            _animatedMenuRawImage = null;
+            _animatedMenuTintOverlayImage = null;
+            _animatedMenuCanvasTintOverlayImage = null;
+            _animatedMenuWispOverlayImage = null;
+            return;
+        }
+
+        RawImage? rawImage = ResolveAnimatedMenuRawImage();
+        if (rawImage == null)
+        {
+            return;
+        }
+
+        RawImage? overlayImage = EnsureAnimatedMenuTintOverlay(rawImage);
+        if (overlayImage == null)
+        {
+            return;
+        }
+
+        RawImage? canvasOverlayImage = EnsureAnimatedMenuCanvasTintOverlay(rawImage);
+        Color tint = GetAnimatedMenuTintColor();
+
+        float childOverlayStrength = Mathf.Clamp01(_config.AnimatedMenuTintBackgroundOverlayStrength);
+        if (childOverlayStrength > 0.001f)
+        {
+            ApplyAnimatedMenuTintOverlay(overlayImage, new Color(tint.r, tint.g, tint.b, childOverlayStrength));
+        }
+        else
+        {
+            HideAnimatedMenuTintOverlay(overlayImage);
+        }
+
+        if (canvasOverlayImage != null)
+        {
+            float canvasOverlayStrength = Mathf.Clamp01(_config.AnimatedMenuTintCanvasOverlayStrength);
+            if (canvasOverlayStrength > 0.001f)
+            {
+                ApplyAnimatedMenuTintOverlay(canvasOverlayImage, new Color(tint.r, tint.g, tint.b, canvasOverlayStrength));
+            }
+            else
+            {
+                HideAnimatedMenuTintOverlay(canvasOverlayImage);
+            }
+        }
+
+        HideAnimatedMenuTintOverlay(_animatedMenuWispOverlayImage);
+        ApplyAnimatedMenuWispShaderGlobals(useConfig: true);
+
+        rawImage.color = Color.white;
+        rawImage.SetVerticesDirty();
+        Material? material = rawImage.material;
+        if (material != null && material.HasProperty("_Color"))
+        {
+            material.SetColor("_Color", new Color(1f, 1f, 1f, 0f));
+            rawImage.SetMaterialDirty();
+        }
+
+        _animatedMenuRawImage = rawImage;
+        _animatedMenuTintOverlayImage = overlayImage;
+        _animatedMenuCanvasTintOverlayImage = canvasOverlayImage;
+        _animatedMenuTintApplied = true;
+    }
+
+    private bool IsAnimatedMenuBackgroundSelected()
+    {
+        try
+        {
+            object? setting = _menuBackgroundSettingField?.GetValue(null);
+            if (setting == null)
+            {
+                return false;
+            }
+
+            int currentValue = ConvertToInt32(_gameSettingCurrentValueProperty?.GetValue(setting, null));
+            return currentValue == AnimatedMenuBackgroundSettingValue;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private RawImage? ResolveAnimatedMenuRawImage()
+    {
+        if (_animatedMenuRawImage != null)
+        {
+            return _animatedMenuRawImage;
+        }
+
+        if (_blackMenuType == null)
+        {
+            return null;
+        }
+
+        object? blackMenu = UnityEngine.Object.FindObjectOfType(_blackMenuType, false);
+        if (blackMenu == null)
+        {
+            return null;
+        }
+
+        _blackMenuRawImageField ??= GetAllFields(_blackMenuType)
+            .FirstOrDefault(field => typeof(RawImage).IsAssignableFrom(field.FieldType));
+        if (_blackMenuRawImageField?.GetValue(blackMenu) is RawImage fieldRawImage)
+        {
+            _animatedMenuRawImage = fieldRawImage;
+            return fieldRawImage;
+        }
+
+        if (blackMenu is Component component)
+        {
+            _animatedMenuRawImage = component.GetComponent<RawImage>();
+            return _animatedMenuRawImage;
+        }
+
+        return null;
+    }
+
+    private bool IsAnimatedMenuTintEnabled()
+    {
+        return Mathf.Clamp01(_config.AnimatedMenuTintA) > 0.01f;
+    }
+
+    private Color GetAnimatedMenuTintColor()
+    {
+        return new Color(
+            Mathf.Clamp01(_config.AnimatedMenuTintR),
+            Mathf.Clamp01(_config.AnimatedMenuTintG),
+            Mathf.Clamp01(_config.AnimatedMenuTintB),
+            Mathf.Clamp01(_config.AnimatedMenuTintA));
+    }
+
+    private Color GetAnimatedMenuWispColor()
+    {
+        return new Color(
+            Mathf.Clamp01(_config.AnimatedMenuWispR),
+            Mathf.Clamp01(_config.AnimatedMenuWispG),
+            Mathf.Clamp01(_config.AnimatedMenuWispB),
+            Mathf.Clamp01(_config.AnimatedMenuWispA));
+    }
+
+    private void ApplyAnimatedMenuWispShaderGlobals(bool useConfig)
+    {
+        Color color = useConfig
+            ? GetAnimatedMenuWispColor()
+            : new Color(1f, 1f, 1f, 1f);
+        float size = useConfig ? GetAnimatedMenuWispShaderSize(_config.AnimatedMenuWispSize) : 0.68f;
+        float enabled = useConfig ? 1f : 0f;
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalColorRId, color.r);
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalColorGId, color.g);
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalColorBId, color.b);
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalColorAId, Mathf.Clamp01(color.a));
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalSizeId, size);
+        Shader.SetGlobalFloat(AnimatedMenuWispGlobalEnabledId, enabled);
+    }
+
+    private static float GetAnimatedMenuWispShaderSize(float sliderValue)
+    {
+        return Mathf.Lerp(0.68f, 1.55f, Mathf.Clamp01(sliderValue));
+    }
+
+    private RawImage? EnsureAnimatedMenuTintOverlay(RawImage rawImage)
+    {
+        if (_animatedMenuTintOverlayImage != null)
+        {
+            return _animatedMenuTintOverlayImage;
+        }
+
+        Transform parentTransform = rawImage.transform;
+        Transform? existingTransform = parentTransform.Find(AnimatedMenuTintOverlayObjectName);
+        GameObject overlayObject;
+        if (existingTransform != null)
+        {
+            overlayObject = existingTransform.gameObject;
+        }
+        else
+        {
+            overlayObject = new GameObject(AnimatedMenuTintOverlayObjectName);
+            overlayObject.transform.SetParent(parentTransform, false);
+            overlayObject.transform.SetAsLastSibling();
+        }
+
+        RectTransform? rectTransform = overlayObject.GetComponent<RectTransform>();
+        if (rectTransform == null)
+        {
+            rectTransform = overlayObject.AddComponent<RectTransform>();
+        }
+
+        rectTransform.anchorMin = Vector2.zero;
+        rectTransform.anchorMax = Vector2.one;
+        rectTransform.offsetMin = Vector2.zero;
+        rectTransform.offsetMax = Vector2.zero;
+        rectTransform.anchoredPosition = Vector2.zero;
+        rectTransform.localScale = Vector3.one;
+
+        RawImage? overlayImage = overlayObject.GetComponent<RawImage>();
+        if (overlayImage == null)
+        {
+            overlayImage = overlayObject.AddComponent<RawImage>();
+        }
+
+        overlayImage.texture = Texture2D.whiteTexture;
+        overlayImage.raycastTarget = false;
+        _animatedMenuTintOverlayImage = overlayImage;
+        return overlayImage;
+    }
+
+    private RawImage? EnsureAnimatedMenuCanvasTintOverlay(RawImage rawImage)
+    {
+        if (_animatedMenuCanvasTintOverlayImage != null)
+        {
+            return _animatedMenuCanvasTintOverlayImage;
+        }
+
+        Canvas? canvas = rawImage.GetComponentInParent<Canvas>();
+        if (canvas == null)
+        {
+            return null;
+        }
+
+        Transform overlayParent = rawImage.transform.parent ?? canvas.transform;
+        Transform? existingTransform = overlayParent.Find(AnimatedMenuCanvasTintOverlayObjectName);
+        GameObject overlayObject;
+        if (existingTransform != null)
+        {
+            overlayObject = existingTransform.gameObject;
+        }
+        else
+        {
+            overlayObject = new GameObject(AnimatedMenuCanvasTintOverlayObjectName);
+            overlayObject.transform.SetParent(overlayParent, false);
+        }
+
+        if (!ReferenceEquals(overlayObject.transform.parent, overlayParent))
+        {
+            overlayObject.transform.SetParent(overlayParent, false);
+        }
+
+        int overlaySiblingIndex = Math.Min(rawImage.transform.GetSiblingIndex() + 1, Math.Max(0, overlayParent.childCount - 1));
+        overlayObject.transform.SetSiblingIndex(overlaySiblingIndex);
+
+        RectTransform? rectTransform = overlayObject.GetComponent<RectTransform>();
+        if (rectTransform == null)
+        {
+            rectTransform = overlayObject.AddComponent<RectTransform>();
+        }
+
+        rectTransform.anchorMin = Vector2.zero;
+        rectTransform.anchorMax = Vector2.one;
+        rectTransform.offsetMin = Vector2.zero;
+        rectTransform.offsetMax = Vector2.zero;
+        rectTransform.anchoredPosition = Vector2.zero;
+        rectTransform.localScale = Vector3.one;
+
+        RawImage? overlayImage = overlayObject.GetComponent<RawImage>();
+        if (overlayImage == null)
+        {
+            overlayImage = overlayObject.AddComponent<RawImage>();
+        }
+
+        overlayImage.texture = Texture2D.whiteTexture;
+        overlayImage.raycastTarget = false;
+        _animatedMenuCanvasTintOverlayImage = overlayImage;
+        return overlayImage;
+    }
+
+    private RawImage? EnsureAnimatedMenuWispOverlay(RawImage rawImage)
+    {
+        if (_animatedMenuWispOverlayImage != null)
+        {
+            return _animatedMenuWispOverlayImage;
+        }
+
+        Canvas? canvas = rawImage.GetComponentInParent<Canvas>();
+        if (canvas == null)
+        {
+            return null;
+        }
+
+        Transform overlayParent = rawImage.transform.parent ?? canvas.transform;
+        Transform? existingTransform = overlayParent.Find(AnimatedMenuWispOverlayObjectName);
+        GameObject overlayObject;
+        if (existingTransform != null)
+        {
+            overlayObject = existingTransform.gameObject;
+        }
+        else
+        {
+            overlayObject = new GameObject(AnimatedMenuWispOverlayObjectName);
+            overlayObject.transform.SetParent(overlayParent, false);
+        }
+
+        if (!ReferenceEquals(overlayObject.transform.parent, overlayParent))
+        {
+            overlayObject.transform.SetParent(overlayParent, false);
+        }
+
+        int overlaySiblingIndex = rawImage.transform.GetSiblingIndex() + 1;
+        if (_animatedMenuCanvasTintOverlayImage != null &&
+            ReferenceEquals(_animatedMenuCanvasTintOverlayImage.transform.parent, overlayParent))
+        {
+            overlaySiblingIndex = _animatedMenuCanvasTintOverlayImage.transform.GetSiblingIndex() + 1;
+        }
+        overlayObject.transform.SetSiblingIndex(Math.Min(overlaySiblingIndex, Math.Max(0, overlayParent.childCount - 1)));
+
+        RectTransform? rectTransform = overlayObject.GetComponent<RectTransform>();
+        if (rectTransform == null)
+        {
+            rectTransform = overlayObject.AddComponent<RectTransform>();
+        }
+
+        rectTransform.anchorMin = Vector2.zero;
+        rectTransform.anchorMax = Vector2.one;
+        rectTransform.offsetMin = Vector2.zero;
+        rectTransform.offsetMax = Vector2.zero;
+        rectTransform.anchoredPosition = Vector2.zero;
+        rectTransform.localScale = Vector3.one;
+
+        RawImage? overlayImage = overlayObject.GetComponent<RawImage>();
+        if (overlayImage == null)
+        {
+            overlayImage = overlayObject.AddComponent<RawImage>();
+        }
+
+        overlayImage.texture = EnsureAnimatedMenuWispTexture();
+        overlayImage.raycastTarget = false;
+        _animatedMenuWispOverlayImage = overlayImage;
+        return overlayImage;
+    }
+
+    private static void ApplyAnimatedMenuTintOverlay(RawImage overlayImage, Color color)
+    {
+        overlayImage.color = color;
+        overlayImage.enabled = true;
+        overlayImage.SetVerticesDirty();
+        overlayImage.SetMaterialDirty();
+    }
+
+    private void ApplyAnimatedMenuWispOverlay(RawImage overlayImage, Color color, float size)
+    {
+        overlayImage.texture = EnsureAnimatedMenuWispTexture();
+        float clampedSize = Mathf.Clamp01(size);
+        float appliedAlpha = Mathf.Clamp01((0.28f + (color.a * 1.1f)) * Mathf.Lerp(0.9f, 1.25f, clampedSize));
+        overlayImage.color = new Color(color.r, color.g, color.b, appliedAlpha);
+        float uvWidth = Mathf.Lerp(3.2f, 0.3f, clampedSize);
+        float uvHeight = Mathf.Lerp(2.5f, 0.38f, clampedSize);
+        float time = Time.unscaledTime;
+        overlayImage.uvRect = new Rect(time * 0.018f, time * 0.011f, uvWidth, uvHeight);
+        overlayImage.enabled = true;
+        overlayImage.SetVerticesDirty();
+        overlayImage.SetMaterialDirty();
+    }
+
+    private static void HideAnimatedMenuTintOverlay(RawImage? overlayImage)
+    {
+        if (overlayImage == null)
+        {
+            return;
+        }
+
+        overlayImage.enabled = false;
+        overlayImage.color = Color.clear;
+        overlayImage.uvRect = new Rect(0f, 0f, 1f, 1f);
+        overlayImage.SetVerticesDirty();
+        overlayImage.SetMaterialDirty();
+    }
+
     private static string? ExtractReleaseVersionLabel(params string?[] candidates)
     {
         foreach (string? candidate in candidates)
@@ -865,9 +1355,16 @@ internal sealed class V1StockTracker
     {
         FlushPendingMenuPersistence();
 
+        if (_overlayEditorVisible && _exportTemplateEditorVisible)
+        {
+            return;
+        }
+
         if (_overlayEditorVisible && Input.GetKeyDown(KeyCode.Escape))
         {
             _overlayEditorVisible = false;
+            _exportTemplateEditorVisible = false;
+            _exportTemplateEditorActiveTemplateId = null;
             StockTrackerLog.WriteDebug("OverlayToggle | visible=0 | key=Escape");
             return;
         }
@@ -878,6 +1375,11 @@ internal sealed class V1StockTracker
             Input.GetKeyDown(KeyCode.Home))
         {
             _overlayEditorVisible = !_overlayEditorVisible;
+            if (!_overlayEditorVisible)
+            {
+                _exportTemplateEditorVisible = false;
+                _exportTemplateEditorActiveTemplateId = null;
+            }
             string toggleKey = controlHeld
                 ? "Ctrl+O"
                 : (Input.GetKeyDown(KeyCode.Home) ? "Home" : "F8");
@@ -938,20 +1440,37 @@ internal sealed class V1StockTracker
             _wipeAllDataConfirmExpiresAt = 0f;
         }
 
-        if (snapshot.RenderWidgetsInGame && snapshot.WidgetEntries.Count > 0)
+        bool exportTemplateModalVisible = _overlayEditorVisible && _exportTemplateEditorVisible;
+
+        if (!exportTemplateModalVisible &&
+            snapshot.RenderWidgetsInGame &&
+            snapshot.WidgetEntries.Count > 0)
         {
             RenderOverlayWidgets(snapshot);
         }
 
-        if (_overlayEditorVisible)
+        if (_overlayEditorVisible && !exportTemplateModalVisible)
         {
             RenderOverlayEditor(snapshot.State, snapshot.SongConfig);
         }
 
-        if (snapshot.SongConfig != null)
+        if (exportTemplateModalVisible)
+        {
+            RenderExportTemplateEditor(snapshot.State);
+            return;
+        }
+
+        if (snapshot.SongConfig != null || HasGlobalOverlayColorTarget())
         {
             RenderOverlayColorPicker(snapshot.SongConfig);
         }
+    }
+
+    private bool HasGlobalOverlayColorTarget()
+    {
+        return string.Equals(_overlayColorTargetKey, "desktop:border", StringComparison.Ordinal) ||
+            string.Equals(_overlayColorTargetKey, AnimatedMenuColorPickerTargetKey, StringComparison.Ordinal) ||
+            string.Equals(_overlayColorTargetKey, AnimatedMenuWispColorPickerTargetKey, StringComparison.Ordinal);
     }
 
     private TrackerState BuildMenuOverlayState()
@@ -1018,6 +1537,7 @@ internal sealed class V1StockTracker
         {
             return eventType == EventType.Layout ||
                 eventType == EventType.Repaint ||
+                eventType == EventType.KeyDown ||
                 eventType == EventType.MouseDown ||
                 eventType == EventType.MouseDrag ||
                 eventType == EventType.MouseUp ||
@@ -1033,6 +1553,27 @@ internal sealed class V1StockTracker
             eventType == EventType.MouseDown ||
             eventType == EventType.MouseDrag ||
             eventType == EventType.MouseUp;
+    }
+
+    private void RenderAnimatedMenuDiagnosticOnGuiOverlay()
+    {
+        if (_latestState.IsInSong || !IsAnimatedMenuTintEnabled())
+        {
+            return;
+        }
+
+        float strength = Mathf.Clamp01(_config.AnimatedMenuTintOnGuiOverlayStrength);
+        if (strength <= 0.001f)
+        {
+            return;
+        }
+
+        Color tint = GetAnimatedMenuTintColor();
+        Color overlayColor = new Color(tint.r, tint.g, tint.b, strength);
+        GUI.Label(
+            new Rect(0f, 0f, Screen.width, Screen.height),
+            new GUIContent(string.Empty, EnsureAnimatedMenuOnGuiOverlayTexture(overlayColor), string.Empty),
+            GUI.skin.label);
     }
 
     private List<OverlayWidgetRenderEntry> BuildOverlayWidgetEntries(TrackerState state, SongConfig songConfig)
@@ -1175,6 +1716,46 @@ internal sealed class V1StockTracker
                 }
 
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
+                bool openExportTemplatesClicked = GUILayout.Toggle(false, new GUIContent("EXPORT TEMPLATES"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                if (openExportTemplatesClicked)
+                {
+                    _exportTemplateEditorVisible = true;
+                    EnsureSelectedExportTemplateId();
+                }
+
+                GUILayout.Label(string.Empty, GUILayout.Height(10f));
+                GUILayout.Label("Main Menu Animated Tint", GUILayout.Width(contentRect.width - 24f));
+                bool animatedMenuTintEnabled = IsAnimatedMenuTintEnabled();
+                bool updatedAnimatedMenuTintEnabled = GUILayout.Toggle(animatedMenuTintEnabled, new GUIContent("ENABLE LIVE ANIMATED MENU TINT"), GUI.skin.toggle, GUILayout.Width(contentRect.width - 24f));
+                if (updatedAnimatedMenuTintEnabled != animatedMenuTintEnabled)
+                {
+                    _config.AnimatedMenuTintA = updatedAnimatedMenuTintEnabled ? 1f : 0f;
+                    MarkConfigDirty(affectsGlobalSnapshot: true);
+                    ApplyAnimatedMenuTint();
+                }
+
+                bool previousGuiEnabled = GUI.enabled;
+                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                bool animatedMenuTintClicked = GUILayout.Toggle(false, new GUIContent("ANIMATED MENU COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                GUI.enabled = previousGuiEnabled;
+                if (animatedMenuTintClicked)
+                {
+                    OpenAnimatedMenuColorPicker(rect);
+                }
+
+                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                bool animatedMenuWispClicked = GUILayout.Toggle(false, new GUIContent("WISP COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                GUI.enabled = previousGuiEnabled;
+                if (animatedMenuWispClicked)
+                {
+                    OpenAnimatedMenuWispColorPicker(rect);
+                }
+
+                if (updatedAnimatedMenuTintEnabled)
+                {
+                    RenderAnimatedMenuTintControls(contentRect.width - 24f);
+                }
+                GUILayout.Label(string.Empty, GUILayout.Height(10f));
                 RenderOverlayEditorTransparencyControls(overlayConfig, contentRect.width - 24f);
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
                 GUILayout.Label("These export settings are global and apply to every song.", GUILayout.Width(contentRect.width - 24f));
@@ -1222,6 +1803,46 @@ internal sealed class V1StockTracker
                     DisableAllTextExports(defaultEnabledTextExports);
                 }
 
+                GUILayout.Label(string.Empty, GUILayout.Height(8f));
+                bool openExportTemplatesClicked = GUILayout.Toggle(false, new GUIContent("EXPORT TEMPLATES"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                if (openExportTemplatesClicked)
+                {
+                    _exportTemplateEditorVisible = true;
+                    EnsureSelectedExportTemplateId();
+                }
+
+                GUILayout.Label(string.Empty, GUILayout.Height(8f));
+                GUILayout.Label("Main Menu Animated Tint", GUILayout.Width(contentRect.width - 24f));
+                bool animatedMenuTintEnabled = IsAnimatedMenuTintEnabled();
+                bool updatedAnimatedMenuTintEnabled = GUILayout.Toggle(animatedMenuTintEnabled, new GUIContent("ENABLE LIVE ANIMATED MENU TINT"), GUI.skin.toggle, GUILayout.Width(contentRect.width - 24f));
+                if (updatedAnimatedMenuTintEnabled != animatedMenuTintEnabled)
+                {
+                    _config.AnimatedMenuTintA = updatedAnimatedMenuTintEnabled ? 1f : 0f;
+                    MarkConfigDirty(affectsGlobalSnapshot: true);
+                    ApplyAnimatedMenuTint();
+                }
+
+                bool previousGuiEnabled = GUI.enabled;
+                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                bool animatedMenuTintClicked = GUILayout.Toggle(false, new GUIContent("ANIMATED MENU COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                GUI.enabled = previousGuiEnabled;
+                if (animatedMenuTintClicked)
+                {
+                    OpenAnimatedMenuColorPicker(rect);
+                }
+
+                GUI.enabled = updatedAnimatedMenuTintEnabled;
+                bool animatedMenuWispClicked = GUILayout.Toggle(false, new GUIContent("WISP COLOR"), GUI.skin.button, GUILayout.Width(Mathf.Min(220f, contentRect.width - 24f)));
+                GUI.enabled = previousGuiEnabled;
+                if (animatedMenuWispClicked)
+                {
+                    OpenAnimatedMenuWispColorPicker(rect);
+                }
+
+                if (updatedAnimatedMenuTintEnabled)
+                {
+                    RenderAnimatedMenuTintControls(contentRect.width - 24f);
+                }
                 GUILayout.Label(string.Empty, GUILayout.Height(8f));
                 bool showTrackedSections = HasAnyTrackedSectionExportEnabled(songConfig) || _overlayEditorVisible;
                 if (showTrackedSections)
@@ -1358,29 +1979,913 @@ internal sealed class V1StockTracker
         PersistEditorRect(overlayConfig, updated);
     }
 
-    private void RenderOverlayEditorTransparencyControls(OverlayEditorConfig overlayConfig, float width)
+    private void RenderExportTemplateEditor(TrackerState state)
     {
-        GUILayout.Label("Overlay Transparency", GUILayout.Width(width));
-        float alpha = Mathf.Clamp01(overlayConfig.BackgroundA);
-        float updatedAlpha = RenderOverlayEditorTransparencySlider(alpha, width, 0.15f, 1f);
-        if (Math.Abs(updatedAlpha - alpha) >= 0.001f)
+        EnsureSelectedExportTemplateId();
+        ExportTemplateEditorConfig panelConfig = EnsureExportTemplateEditorConfig();
+        Rect rect = GetEditorRect(panelConfig);
+        bool resizeHandleVisible = !panelConfig.ResizeHandleHidden;
+        Rect updated = RenderOverlayPanel("export-templates", rect, "Export Templates", resizeHandleVisible, visible =>
         {
-            overlayConfig.BackgroundA = updatedAlpha;
-            MarkConfigDirty(affectsGlobalSnapshot: true);
-        }
+            if (panelConfig.ResizeHandleHidden == !visible)
+            {
+                return;
+            }
 
-        GUILayout.Label($"Background Opacity: {Mathf.RoundToInt(Mathf.Clamp01(overlayConfig.BackgroundA) * 100f)}%", GUILayout.Width(width));
+            panelConfig.ResizeHandleHidden = !visible;
+            MarkConfigDirty(affectsGlobalSnapshot: true);
+        }, contentRect =>
+        {
+            RenderExportTemplateEditorContent(state, contentRect);
+        });
+
+        PersistEditorRect(panelConfig, updated);
     }
 
-    private float RenderOverlayEditorTransparencySlider(float value, float width, float min, float max)
+    private void RenderExportTemplateEditorContent(TrackerState state, Rect contentRect)
     {
-        Rect sliderRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Width(width), GUILayout.Height(18f));
+        ExportTemplateDefinition? selectedDefinition = GetSelectedExportTemplateDefinition();
+        if (selectedDefinition == null)
+        {
+            return;
+        }
+
+        string draftText = GetExportTemplateDraftText(selectedDefinition);
+        string savedText = GetEffectiveExportTemplateSource(selectedDefinition);
+        bool hasSavedOverride = EnsureExportTemplateOverrides().ContainsKey(selectedDefinition.TemplateId);
+        bool isDirty = !string.Equals(draftText, savedText, StringComparison.Ordinal);
+        bool differsFromDefault = !string.Equals(draftText, selectedDefinition.DefaultTemplate, StringComparison.Ordinal);
+        bool templateValid = ExportTemplateEngine.TryCompile(selectedDefinition, draftText, out CompiledExportTemplate? compiledTemplate, out string? validationError, out int validationLine);
+
+        string previewText;
+        string statusText;
+        Color statusColor;
+        if (!templateValid || compiledTemplate == null)
+        {
+            previewText = "Preview unavailable until the template validates.";
+            statusText = $"Invalid template on line {validationLine.ToString(CultureInfo.InvariantCulture)}: {validationError}";
+            statusColor = new Color(1f, 0.45f, 0.45f, 1f);
+        }
+        else if (TryBuildExportTemplatePreview(selectedDefinition, compiledTemplate, state, out string? generatedPreview, out string? unavailableMessage))
+        {
+            previewText = generatedPreview ?? string.Empty;
+            statusText = isDirty ? "Valid template. Unsaved changes are local to this editor until you press SAVE." : "Valid template. Saved output is live.";
+            statusColor = isDirty
+                ? new Color(1f, 0.86f, 0.48f, 1f)
+                : new Color(0.55f, 0.95f, 0.67f, 1f);
+        }
+        else
+        {
+            previewText = unavailableMessage ?? "Preview unavailable for the current state.";
+            statusText = isDirty ? "Valid template. Unsaved changes are local to this editor until you press SAVE." : "Valid template. Saved output is live.";
+            statusColor = isDirty
+                ? new Color(1f, 0.86f, 0.48f, 1f)
+                : new Color(0.55f, 0.95f, 0.67f, 1f);
+        }
+
+        GUIStyle introStyle = new GUIStyle(GUI.skin.label)
+        {
+        };
+        introStyle.normal.textColor = new Color(0.82f, 0.9f, 1f, 0.95f);
+
+        GUIStyle statusStyle = new GUIStyle(GUI.skin.label)
+        {
+        };
+        statusStyle.normal.textColor = statusColor;
+
+        GUIStyle helpStyle = new GUIStyle(GUI.skin.label)
+        {
+        };
+        helpStyle.normal.textColor = new Color(0.8f, 0.88f, 0.98f, 0.96f);
+
+        GUIStyle sectionHeaderStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold
+        };
+        sectionHeaderStyle.normal.textColor = Color.white;
+
+        GUIStyle previewStyle = new GUIStyle(GUI.skin.label)
+        {
+        };
+        previewStyle.normal.textColor = new Color(0.93f, 0.97f, 1f, 0.98f);
+
+        GUIStyle categoryStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold
+        };
+        categoryStyle.normal.textColor = new Color(0.71f, 0.84f, 1f, 0.98f);
+
+        float actionHeight = 28f;
+        float gap = 8f;
+        float headerInfoHeight = 42f;
+        float previewHeight = Mathf.Clamp(contentRect.height * 0.26f, 130f, 200f);
+        float upperY = actionHeight + gap + headerInfoHeight + gap;
+        float upperHeight = Mathf.Max(180f, contentRect.height - upperY - previewHeight - gap);
+        float leftWidth = Mathf.Clamp(contentRect.width * 0.22f, 180f, 250f);
+        float rightWidth = Mathf.Clamp(contentRect.width * 0.24f, 210f, 300f);
+        float centerWidth = Mathf.Max(220f, contentRect.width - leftWidth - rightWidth - (gap * 2f));
+
+        Rect saveRect = new Rect(contentRect.x, contentRect.y, 110f, actionHeight);
+        Rect revertRect = new Rect(saveRect.xMax + gap, contentRect.y, 140f, actionHeight);
+        Rect resetRect = new Rect(revertRect.xMax + gap, contentRect.y, 140f, actionHeight);
+        Rect closeRect = new Rect(contentRect.xMax - 100f, contentRect.y, 100f, actionHeight);
+        Rect infoRect = new Rect(contentRect.x, contentRect.y + actionHeight + gap, contentRect.width, headerInfoHeight);
+        Rect listRect = new Rect(contentRect.x, contentRect.y + upperY, leftWidth, upperHeight);
+        Rect editorRect = new Rect(listRect.xMax + gap, listRect.y, centerWidth, upperHeight);
+        Rect helpRect = new Rect(editorRect.xMax + gap, listRect.y, rightWidth, upperHeight);
+        Rect previewRect = new Rect(contentRect.x, listRect.yMax + gap, contentRect.width, previewHeight);
+
+        bool previousGuiEnabled = GUI.enabled;
+        GUI.enabled = templateValid && isDirty;
+        if (GUI.Toggle(saveRect, false, new GUIContent("SAVE"), GUI.skin.button))
+        {
+            SaveExportTemplateDraft(selectedDefinition, draftText);
+        }
+
+        GUI.enabled = isDirty;
+        if (GUI.Toggle(revertRect, false, new GUIContent("REVERT CHANGES"), GUI.skin.button))
+        {
+            RevertExportTemplateDraft(selectedDefinition.TemplateId);
+            draftText = GetExportTemplateDraftText(selectedDefinition);
+        }
+
+        GUI.enabled = hasSavedOverride || differsFromDefault;
+        if (GUI.Toggle(resetRect, false, new GUIContent("RESET TO DEFAULT"), GUI.skin.button))
+        {
+            ResetExportTemplateOverride(selectedDefinition);
+            draftText = GetExportTemplateDraftText(selectedDefinition);
+        }
+
+        GUI.enabled = previousGuiEnabled;
+        if (GUI.Toggle(closeRect, false, new GUIContent("CLOSE"), GUI.skin.button))
+        {
+            _exportTemplateEditorVisible = false;
+        }
+
+        GUI.Label(infoRect, $"Configure the text inside exported .txt files. Use {{token}} replacements and [[if token]] / [[ifnot token]] line guards.{Environment.NewLine}Changes stay local to this panel until you press SAVE.", introStyle);
+
+        GUI.Box(listRect, GUIContent.none, GUI.skin.box);
+        GUI.Box(editorRect, GUIContent.none, GUI.skin.box);
+        GUI.Box(helpRect, GUIContent.none, GUI.skin.box);
+        GUI.Box(previewRect, GUIContent.none, GUI.skin.box);
+
+        RenderExportTemplateList(listRect, categoryStyle);
+        string updatedDraftText = RenderExportTemplateEditorTextArea(editorRect, selectedDefinition, draftText, sectionHeaderStyle);
+        if (!string.Equals(updatedDraftText, draftText, StringComparison.Ordinal))
+        {
+            SetExportTemplateDraftText(selectedDefinition.TemplateId, updatedDraftText);
+            draftText = updatedDraftText;
+        }
+
+        RenderExportTemplateHelp(helpRect, selectedDefinition, sectionHeaderStyle, helpStyle);
+        RenderExportTemplatePreview(previewRect, statusText, previewText, sectionHeaderStyle, statusStyle, previewStyle);
+    }
+
+    private void RenderExportTemplateList(Rect listRect, GUIStyle categoryStyle)
+    {
+        Rect headerRect = new Rect(listRect.x + 10f, listRect.y + 8f, listRect.width - 20f, 20f);
+        GUI.Label(headerRect, "Template List", categoryStyle);
+
+        Rect scrollRect = new Rect(listRect.x + 8f, listRect.y + 30f, Mathf.Max(0f, listRect.width - 16f), Mathf.Max(0f, listRect.height - 38f));
+        GUILayout.BeginArea(scrollRect);
+        _exportTemplateEditorListScroll = GUILayout.BeginScrollView(
+            _exportTemplateEditorListScroll,
+            GUILayout.Width(scrollRect.width),
+            GUILayout.Height(scrollRect.height));
+        foreach (ExportTemplateCategory category in Enum.GetValues(typeof(ExportTemplateCategory)))
+        {
+            GUILayout.Label(ExportTemplateCatalog.GetCategoryLabel(category), categoryStyle, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+            foreach (ExportTemplateDefinition definition in ExportTemplateCatalog.All.Where(candidate => candidate.Category == category))
+            {
+                bool selected = string.Equals(_selectedExportTemplateId, definition.TemplateId, StringComparison.Ordinal);
+                bool clicked = GUILayout.Toggle(selected, new GUIContent(definition.Label), GUI.skin.button, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+                if (clicked && !selected)
+                {
+                    _selectedExportTemplateId = definition.TemplateId;
+                }
+            }
+
+            GUILayout.Label(string.Empty, GUILayout.Height(4f));
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private string RenderExportTemplateEditorTextArea(Rect editorRect, ExportTemplateDefinition definition, string draftText, GUIStyle sectionHeaderStyle)
+    {
+        Rect titleRect = new Rect(editorRect.x + 10f, editorRect.y + 8f, editorRect.width - 20f, 20f);
+        Rect subtitleRect = new Rect(editorRect.x + 10f, editorRect.y + 28f, editorRect.width - 20f, 18f);
+        Rect scrollRect = new Rect(editorRect.x + 8f, editorRect.y + 50f, Mathf.Max(0f, editorRect.width - 16f), Mathf.Max(0f, editorRect.height - 58f));
+
+        GUIStyle subtitleStyle = new GUIStyle(GUI.skin.label);
+        subtitleStyle.normal.textColor = new Color(0.72f, 0.82f, 0.93f, 0.95f);
+
+        GUIStyle lineStyle = new GUIStyle(GUI.skin.textField);
+        GUIStyle lineNumberStyle = new GUIStyle(GUI.skin.label);
+        lineNumberStyle.alignment = TextAnchor.MiddleRight;
+        lineNumberStyle.normal.textColor = new Color(0.68f, 0.8f, 0.94f, 0.94f);
+
+        GUI.Label(titleRect, definition.Label, sectionHeaderStyle);
+        GUI.Label(subtitleRect, definition.TemplateId, subtitleStyle);
+
+        string normalizedDraft = (draftText ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n');
+        List<string> lines = normalizedDraft.Split(new[] { '\n' }, StringSplitOptions.None).ToList();
+        if (lines.Count == 0)
+        {
+            lines.Add(string.Empty);
+        }
+
+        EnsureExportTemplateEditorSelection(definition.TemplateId, lines);
+
+        GUILayout.BeginArea(scrollRect);
+        _exportTemplateEditorTextScroll = GUILayout.BeginScrollView(
+            _exportTemplateEditorTextScroll,
+            GUILayout.Width(scrollRect.width),
+            GUILayout.Height(scrollRect.height));
+
+        bool changed = false;
+        float lineWidth = Mathf.Max(80f, scrollRect.width - 88f);
+        for (int i = 0; i < lines.Count; i++)
+        {
+            Rect rowRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)), GUILayout.Height(24f));
+            Rect lineNumberRect = new Rect(rowRect.x, rowRect.y + 3f, 26f, 18f);
+            Rect fieldRect = new Rect(rowRect.x + 30f, rowRect.y + 2f, lineWidth, 20f);
+            Rect removeRect = new Rect(fieldRect.xMax + 4f, rowRect.y + 1f, 24f, 22f);
+            bool lineSelected =
+                string.Equals(_exportTemplateEditorActiveTemplateId, definition.TemplateId, StringComparison.Ordinal) &&
+                _exportTemplateEditorActiveLineIndex == i;
+            Event? currentEvent = Event.current;
+
+            if (currentEvent != null &&
+                currentEvent.type == EventType.MouseDown &&
+                fieldRect.Contains(currentEvent.mousePosition))
+            {
+                _exportTemplateEditorActiveTemplateId = definition.TemplateId;
+                _exportTemplateEditorActiveLineIndex = i;
+                _exportTemplateEditorCursorIndex = (lines[i] ?? string.Empty).Length;
+                currentEvent.Use();
+                lineSelected = true;
+            }
+
+            if (lineSelected)
+            {
+                GUI.Box(rowRect, GUIContent.none, GUI.skin.box);
+            }
+
+            GUI.Label(lineNumberRect, (i + 1).ToString(CultureInfo.InvariantCulture), lineNumberStyle);
+            string displayText = lineSelected
+                ? BuildTemplateEditorDisplayLine(lines[i] ?? string.Empty, _exportTemplateEditorCursorIndex)
+                : (lines[i] ?? string.Empty);
+            GUI.Box(fieldRect, GUIContent.none, GUI.skin.box);
+            GUI.Label(new Rect(fieldRect.x + 4f, fieldRect.y + 1f, Mathf.Max(0f, fieldRect.width - 8f), fieldRect.height - 2f), displayText, lineStyle);
+
+            bool removeClicked = GUI.Toggle(removeRect, false, new GUIContent("X"), GUI.skin.button);
+            if (removeClicked && lines.Count > 1)
+            {
+                lines.RemoveAt(i);
+                if (_exportTemplateEditorActiveLineIndex >= lines.Count)
+                {
+                    _exportTemplateEditorActiveLineIndex = lines.Count - 1;
+                }
+
+                if (_exportTemplateEditorActiveLineIndex < 0)
+                {
+                    _exportTemplateEditorActiveLineIndex = 0;
+                }
+
+                _exportTemplateEditorCursorIndex = Mathf.Clamp(_exportTemplateEditorCursorIndex, 0, lines[Mathf.Clamp(_exportTemplateEditorActiveLineIndex, 0, lines.Count - 1)].Length);
+                changed = true;
+                i--;
+            }
+        }
+
+        if (HandleExportTemplateEditorKeyboard(definition.TemplateId, lines))
+        {
+            changed = true;
+        }
+
+        GUILayout.Label(string.Empty, GUILayout.Height(4f));
+        bool addLineClicked = GUILayout.Toggle(false, new GUIContent("ADD LINE"), GUI.skin.button, GUILayout.Width(Mathf.Min(120f, Mathf.Max(120f, scrollRect.width - 26f))));
+        if (addLineClicked)
+        {
+            lines.Add(string.Empty);
+            _exportTemplateEditorActiveTemplateId = definition.TemplateId;
+            _exportTemplateEditorActiveLineIndex = lines.Count - 1;
+            _exportTemplateEditorCursorIndex = 0;
+            changed = true;
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+        return changed
+            ? string.Join(Environment.NewLine, lines.ToArray())
+            : draftText ?? string.Empty;
+    }
+
+    private void EnsureExportTemplateEditorSelection(string templateId, List<string> lines)
+    {
+        if (!string.Equals(_exportTemplateEditorActiveTemplateId, templateId, StringComparison.Ordinal))
+        {
+            _exportTemplateEditorActiveTemplateId = templateId;
+            _exportTemplateEditorActiveLineIndex = 0;
+            _exportTemplateEditorCursorIndex = lines.Count > 0 ? lines[0].Length : 0;
+            return;
+        }
+
+        if (lines.Count == 0)
+        {
+            _exportTemplateEditorActiveLineIndex = 0;
+            _exportTemplateEditorCursorIndex = 0;
+            return;
+        }
+
+        _exportTemplateEditorActiveLineIndex = Mathf.Clamp(_exportTemplateEditorActiveLineIndex, 0, lines.Count - 1);
+        _exportTemplateEditorCursorIndex = Mathf.Clamp(_exportTemplateEditorCursorIndex, 0, lines[_exportTemplateEditorActiveLineIndex].Length);
+    }
+
+    private bool HandleExportTemplateEditorKeyboard(string templateId, List<string> lines)
+    {
+        if (!string.Equals(_exportTemplateEditorActiveTemplateId, templateId, StringComparison.Ordinal) ||
+            lines.Count == 0)
+        {
+            return false;
+        }
+
+        Event? currentEvent = Event.current;
+        if (currentEvent == null || currentEvent.type != EventType.KeyDown)
+        {
+            return false;
+        }
+
+        int activeLineIndex = Mathf.Clamp(_exportTemplateEditorActiveLineIndex, 0, lines.Count - 1);
+        string activeLine = lines[activeLineIndex] ?? string.Empty;
+        int cursorIndex = Mathf.Clamp(_exportTemplateEditorCursorIndex, 0, activeLine.Length);
+        bool handled = false;
+
+        switch (currentEvent.keyCode)
+        {
+            case KeyCode.LeftArrow:
+                if (cursorIndex > 0)
+                {
+                    cursorIndex--;
+                }
+                else if (activeLineIndex > 0)
+                {
+                    activeLineIndex--;
+                    cursorIndex = lines[activeLineIndex].Length;
+                }
+                handled = true;
+                break;
+            case KeyCode.RightArrow:
+                if (cursorIndex < activeLine.Length)
+                {
+                    cursorIndex++;
+                }
+                else if (activeLineIndex < lines.Count - 1)
+                {
+                    activeLineIndex++;
+                    cursorIndex = 0;
+                }
+                handled = true;
+                break;
+            case KeyCode.UpArrow:
+                if (activeLineIndex > 0)
+                {
+                    activeLineIndex--;
+                    cursorIndex = Mathf.Clamp(cursorIndex, 0, lines[activeLineIndex].Length);
+                }
+                handled = true;
+                break;
+            case KeyCode.DownArrow:
+                if (activeLineIndex < lines.Count - 1)
+                {
+                    activeLineIndex++;
+                    cursorIndex = Mathf.Clamp(cursorIndex, 0, lines[activeLineIndex].Length);
+                }
+                handled = true;
+                break;
+            case KeyCode.Home:
+                cursorIndex = 0;
+                handled = true;
+                break;
+            case KeyCode.End:
+                cursorIndex = activeLine.Length;
+                handled = true;
+                break;
+            case KeyCode.Return:
+            case KeyCode.KeypadEnter:
+                string trailingText = activeLine.Substring(cursorIndex);
+                lines[activeLineIndex] = activeLine.Substring(0, cursorIndex);
+                lines.Insert(activeLineIndex + 1, trailingText);
+                activeLineIndex++;
+                cursorIndex = 0;
+                handled = true;
+                break;
+            case KeyCode.Backspace:
+                if (cursorIndex > 0)
+                {
+                    lines[activeLineIndex] = activeLine.Remove(cursorIndex - 1, 1);
+                    cursorIndex--;
+                }
+                else if (activeLineIndex > 0)
+                {
+                    int previousLength = lines[activeLineIndex - 1].Length;
+                    lines[activeLineIndex - 1] = lines[activeLineIndex - 1] + activeLine;
+                    lines.RemoveAt(activeLineIndex);
+                    activeLineIndex--;
+                    cursorIndex = previousLength;
+                }
+                handled = true;
+                break;
+            case KeyCode.Delete:
+                if (cursorIndex < activeLine.Length)
+                {
+                    lines[activeLineIndex] = activeLine.Remove(cursorIndex, 1);
+                }
+                else if (activeLineIndex < lines.Count - 1)
+                {
+                    lines[activeLineIndex] = activeLine + lines[activeLineIndex + 1];
+                    lines.RemoveAt(activeLineIndex + 1);
+                }
+                handled = true;
+                break;
+            case KeyCode.Tab:
+                lines[activeLineIndex] = activeLine.Insert(cursorIndex, "    ");
+                cursorIndex += 4;
+                handled = true;
+                break;
+        }
+
+        if (!handled && !char.IsControl(currentEvent.character))
+        {
+            lines[activeLineIndex] = activeLine.Insert(cursorIndex, currentEvent.character.ToString());
+            cursorIndex++;
+            handled = true;
+        }
+
+        if (!handled)
+        {
+            return false;
+        }
+
+        _exportTemplateEditorActiveLineIndex = Mathf.Clamp(activeLineIndex, 0, lines.Count - 1);
+        _exportTemplateEditorCursorIndex = Mathf.Clamp(cursorIndex, 0, lines[_exportTemplateEditorActiveLineIndex].Length);
+        currentEvent.Use();
+        return true;
+    }
+
+    private static string BuildTemplateEditorDisplayLine(string line, int cursorIndex)
+    {
+        string safeLine = line ?? string.Empty;
+        int clampedCursor = Mathf.Clamp(cursorIndex, 0, safeLine.Length);
+        return safeLine.Substring(0, clampedCursor) + "|" + safeLine.Substring(clampedCursor);
+    }
+
+    private void RenderExportTemplateHelp(Rect helpRect, ExportTemplateDefinition definition, GUIStyle sectionHeaderStyle, GUIStyle helpStyle)
+    {
+        Rect titleRect = new Rect(helpRect.x + 10f, helpRect.y + 8f, helpRect.width - 20f, 20f);
+        Rect scrollRect = new Rect(helpRect.x + 8f, helpRect.y + 30f, Mathf.Max(0f, helpRect.width - 16f), Mathf.Max(0f, helpRect.height - 38f));
+
+        GUI.Label(titleRect, "Tokens & Syntax", sectionHeaderStyle);
+
+        List<string> helpLines = new();
+        helpLines.Add("Allowed tokens");
+        foreach (string token in definition.AllowedTokens)
+        {
+            helpLines.Add("{{" + token + "}}");
+        }
+
+        helpLines.Add(string.Empty);
+        helpLines.Add("Conditional lines");
+        helpLines.Add("[[if token_name]]Only show this line when token_name is true or has a value");
+        helpLines.Add("[[ifnot token_name]]Only show this line when token_name is false, empty, or missing");
+        helpLines.Add(string.Empty);
+        helpLines.Add("Notes");
+        helpLines.Add("Conditionals only apply to the current line.");
+        helpLines.Add("Unknown tokens or bad directives block SAVE.");
+        helpLines.Add("Empty templates are allowed and export an empty file.");
+        string helpText = string.Join(Environment.NewLine, helpLines.ToArray());
+
+        GUILayout.BeginArea(scrollRect);
+        _exportTemplateEditorTokenScroll = GUILayout.BeginScrollView(
+            _exportTemplateEditorTokenScroll,
+            GUILayout.Width(scrollRect.width),
+            GUILayout.Height(scrollRect.height));
+        GUILayout.Label(helpText, helpStyle, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private void RenderExportTemplatePreview(Rect previewRect, string statusText, string previewText, GUIStyle sectionHeaderStyle, GUIStyle statusStyle, GUIStyle previewStyle)
+    {
+        Rect titleRect = new Rect(previewRect.x + 10f, previewRect.y + 8f, previewRect.width - 20f, 20f);
+        Rect statusRect = new Rect(previewRect.x + 10f, previewRect.y + 30f, previewRect.width - 20f, 34f);
+        Rect scrollRect = new Rect(previewRect.x + 8f, previewRect.y + 66f, Mathf.Max(0f, previewRect.width - 16f), Mathf.Max(0f, previewRect.height - 74f));
+
+        GUI.Label(titleRect, "Preview", sectionHeaderStyle);
+        GUI.Label(statusRect, statusText, statusStyle);
+
+        string previewValue = string.IsNullOrEmpty(previewText) ? "(empty output)" : previewText;
+        GUILayout.BeginArea(scrollRect);
+        _exportTemplateEditorPreviewScroll = GUILayout.BeginScrollView(
+            _exportTemplateEditorPreviewScroll,
+            GUILayout.Width(scrollRect.width),
+            GUILayout.Height(scrollRect.height));
+        GUILayout.Label(previewValue, previewStyle, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private void EnsureSelectedExportTemplateId()
+    {
+        string? selectedTemplateId = _selectedExportTemplateId;
+        if (selectedTemplateId != null &&
+            selectedTemplateId.Length > 0 &&
+            ExportTemplateCatalog.TryGet(selectedTemplateId) != null)
+        {
+            return;
+        }
+
+        _selectedExportTemplateId = ExportTemplateCatalog.All.FirstOrDefault()?.TemplateId;
+    }
+
+    private ExportTemplateDefinition? GetSelectedExportTemplateDefinition()
+    {
+        EnsureSelectedExportTemplateId();
+        string? selectedTemplateId = _selectedExportTemplateId;
+        if (selectedTemplateId == null || selectedTemplateId.Length == 0)
+        {
+            return null;
+        }
+
+        return ExportTemplateCatalog.TryGet(selectedTemplateId);
+    }
+
+    private string GetExportTemplateDraftText(ExportTemplateDefinition definition)
+    {
+        return _exportTemplateEditorDrafts.TryGetValue(definition.TemplateId, out string? draft)
+            ? draft
+            : GetEffectiveExportTemplateSource(definition);
+    }
+
+    private void SetExportTemplateDraftText(string templateId, string draftText)
+    {
+        _exportTemplateEditorDrafts[templateId] = draftText ?? string.Empty;
+    }
+
+    private void RevertExportTemplateDraft(string templateId)
+    {
+        _exportTemplateEditorDrafts.Remove(templateId);
+    }
+
+    private void SaveExportTemplateDraft(ExportTemplateDefinition definition, string draftText)
+    {
+        Dictionary<string, string> overrides = EnsureExportTemplateOverrides();
+        string normalizedDraft = draftText ?? string.Empty;
+        if (string.Equals(normalizedDraft, definition.DefaultTemplate, StringComparison.Ordinal))
+        {
+            overrides.Remove(definition.TemplateId);
+        }
+        else
+        {
+            overrides[definition.TemplateId] = normalizedDraft;
+        }
+
+        _exportTemplateEditorDrafts.Remove(definition.TemplateId);
+        MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+        RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
+    }
+
+    private void ResetExportTemplateOverride(ExportTemplateDefinition definition)
+    {
+        bool removed = EnsureExportTemplateOverrides().Remove(definition.TemplateId);
+        _exportTemplateEditorDrafts.Remove(definition.TemplateId);
+        if (removed)
+        {
+            MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
+        }
+    }
+
+    private bool TryBuildExportTemplatePreview(ExportTemplateDefinition definition, CompiledExportTemplate compiledTemplate, TrackerState state, out string? previewText, out string? unavailableMessage)
+    {
+        if (!TryCreateExportTemplatePreviewContext(definition, state, out ExportTemplateRenderContext? previewContext, out unavailableMessage) ||
+            previewContext == null)
+        {
+            previewText = null;
+            return false;
+        }
+
+        previewText = ExportTemplateEngine.Render(compiledTemplate, previewContext);
+        return true;
+    }
+
+    private bool TryCreateExportTemplatePreviewContext(ExportTemplateDefinition definition, TrackerState state, out ExportTemplateRenderContext? context, out string? unavailableMessage)
+    {
+        switch (definition.PreviewContextKind)
+        {
+            case ExportTemplatePreviewContextKind.Metric:
+                string metricLabel;
+                string metricValue;
+                switch (definition.TemplateId)
+                {
+                    case "metric.current_section":
+                        metricLabel = "Current Section";
+                        metricValue = state.CurrentSectionStats != null
+                            ? BuildSectionExportName(state.SectionStats, state.CurrentSectionStats)
+                            : (state.CurrentSection ?? string.Empty);
+                        break;
+                    case "metric.streak":
+                        metricLabel = "Current Streak";
+                        metricValue = state.Streak.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.best_streak":
+                        metricLabel = "Best FC Streak";
+                        metricValue = state.BestStreak.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.attempts":
+                        metricLabel = "Total Attempts";
+                        metricValue = state.Attempts.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.current_ghosted_notes":
+                        metricLabel = "Current Ghosted Notes";
+                        metricValue = state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.current_overstrums":
+                        metricLabel = "Current Overstrums";
+                        metricValue = state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.current_missed_notes":
+                        metricLabel = "Current Missed Notes";
+                        metricValue = state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.lifetime_ghosted_notes":
+                        metricLabel = "Song Lifetime Ghosted Notes";
+                        metricValue = state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.global_lifetime_ghosted_notes":
+                        metricLabel = "Global Lifetime Ghosted Notes";
+                        metricValue = state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "metric.fc_achieved":
+                        metricLabel = "FC Achieved";
+                        metricValue = state.FcAchieved ? "True" : "False";
+                        break;
+                    default:
+                        context = null;
+                        unavailableMessage = "Preview unavailable for that metric template.";
+                        return false;
+                }
+
+                context = CreateMetricTemplateContext(state, metricLabel, metricValue);
+                unavailableMessage = null;
+                return true;
+
+            case ExportTemplatePreviewContextKind.Section:
+                SectionStatsState? previewSection = state.CurrentSectionStats ?? state.SectionStats.FirstOrDefault();
+                if (previewSection == null)
+                {
+                    context = null;
+                    unavailableMessage = "Preview unavailable until a song section is available.";
+                    return false;
+                }
+
+                string sectionExportName = state.SectionStats.Count > 0
+                    ? BuildSectionExportName(state.SectionStats, previewSection)
+                    : previewSection.Name;
+                string sectionLabel;
+                string sectionValue;
+                switch (definition.TemplateId)
+                {
+                    case "section.current_summary":
+                        sectionLabel = "Current Section Summary";
+                        sectionValue = string.Empty;
+                        break;
+                    case "section.name":
+                        sectionLabel = "Section Name";
+                        sectionValue = sectionExportName;
+                        break;
+                    case "section.summary":
+                        sectionLabel = "Section Summary";
+                        sectionValue = string.Empty;
+                        break;
+                    case "section.attempts":
+                        sectionLabel = "Attempts";
+                        sectionValue = previewSection.Attempts.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "section.fcs_past":
+                        sectionLabel = "FCs Past";
+                        sectionValue = previewSection.RunsPast.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "section.killed_the_run":
+                        sectionLabel = "Killed the Run";
+                        sectionValue = previewSection.KilledTheRun.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    default:
+                        sectionLabel = definition.Label;
+                        sectionValue = string.Empty;
+                        break;
+                }
+
+                context = CreateSectionTemplateContext(state, previewSection, sectionExportName, sectionLabel, sectionValue);
+                unavailableMessage = null;
+                return true;
+
+            case ExportTemplatePreviewContextKind.Run:
+                CompletedRunRecord? previewRun = state.CompletedRuns.Count > 0
+                    ? state.CompletedRuns[state.CompletedRuns.Count - 1]
+                    : null;
+                if (previewRun == null)
+                {
+                    context = null;
+                    unavailableMessage = "Preview unavailable until a completed run exists for the current song.";
+                    return false;
+                }
+
+                string runLabel;
+                string runValue;
+                switch (definition.TemplateId)
+                {
+                    case "run.completed_at_utc":
+                        runLabel = "Completed At UTC";
+                        runValue = previewRun.CompletedAtUtc ?? string.Empty;
+                        break;
+                    case "run.percent":
+                        runLabel = "Percent";
+                        runValue = previewRun.Percent.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.score":
+                        runLabel = "Score";
+                        runValue = previewRun.Score.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.best_streak":
+                        runLabel = "Best Streak";
+                        runValue = previewRun.BestStreak.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.first_miss_streak":
+                        runLabel = "First Miss Streak";
+                        runValue = previewRun.FirstMissStreak.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.ghosted_notes":
+                        runLabel = "Ghosted Notes";
+                        runValue = previewRun.GhostedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.overstrums":
+                        runLabel = "Overstrums";
+                        runValue = previewRun.Overstrums.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.missed_notes":
+                        runLabel = "Missed Notes";
+                        runValue = previewRun.MissedNotes.ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case "run.fc_achieved":
+                        runLabel = "FC Achieved";
+                        runValue = previewRun.FcAchieved ? "True" : "False";
+                        break;
+                    case "run.final_section":
+                        runLabel = "Final Section";
+                        runValue = previewRun.FinalSection ?? string.Empty;
+                        break;
+                    case "run.summary":
+                        runLabel = "Run Summary";
+                        runValue = string.Empty;
+                        break;
+                    default:
+                        runLabel = definition.Label;
+                        runValue = string.Empty;
+                        break;
+                }
+
+                context = CreateRunTemplateContext(state, previewRun, runLabel, runValue);
+                unavailableMessage = null;
+                return true;
+
+            default:
+                context = null;
+                unavailableMessage = "Preview unavailable for this template.";
+                return false;
+        }
+    }
+
+    private void RenderOverlayEditorTransparencyControls(OverlayEditorConfig overlayConfig, float width)
+    {
+        RenderAnimatedMenuSliderCard(
+            "Overlay Transparency",
+            width,
+            Mathf.Clamp01(overlayConfig.BackgroundA),
+            value => overlayConfig.BackgroundA = value,
+            "Controls the editor panel background opacity.",
+            0.15f,
+            1f,
+            false);
+    }
+
+    private void RenderAnimatedMenuTintControls(float width)
+    {
+        GUILayout.Label("Animated Menu Layers", GUILayout.Width(width));
+
+        RenderAnimatedMenuSliderCard(
+            "Background Tint Strength",
+            width,
+            _config.AnimatedMenuTintBackgroundOverlayStrength,
+            value => _config.AnimatedMenuTintBackgroundOverlayStrength = value,
+            null);
+
+        RenderAnimatedMenuSliderCard(
+            "Foreground Glow Strength",
+            width,
+            _config.AnimatedMenuTintCanvasOverlayStrength,
+            value => _config.AnimatedMenuTintCanvasOverlayStrength = value,
+            null);
+
+        float wispSize = Mathf.Clamp01(_config.AnimatedMenuWispSize);
+        RenderAnimatedMenuSliderCard(
+            "Wisp Size",
+            width,
+            wispSize,
+            value => _config.AnimatedMenuWispSize = value,
+            null);
+    }
+
+    private void RenderAnimatedMenuSliderCard(string label, float width, float value, Action<float> applyValue, string? description, float min = 0f, float max = 1f, bool applyAnimatedMenuTint = true)
+    {
+        GUIStyle titleStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleLeft
+        };
+        titleStyle.normal.textColor = new Color(0.93f, 0.97f, 1f, 0.98f);
+
+        GUIStyle valueStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter
+        };
+        valueStyle.normal.textColor = Color.white;
+
+        GUIStyle helpStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = Mathf.Max(10, GUI.skin.label.fontSize - 2)
+        };
+        helpStyle.normal.textColor = new Color(0.74f, 0.83f, 0.92f, 0.92f);
+        float clampedValue = Mathf.Clamp(value, min, max);
+        bool hasDescription = !string.IsNullOrWhiteSpace(description);
+        float cardHeight = hasDescription ? 90f : 72f;
+        Rect cardRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Width(width), GUILayout.Height(cardHeight));
+        GUI.Label(cardRect, new GUIContent(string.Empty, EnsureOverlaySliderCardTexture(GetOverlayTexturePixelSize(cardRect.width), GetOverlayTexturePixelSize(cardRect.height)), string.Empty), GUIStyle.none);
+
+        float contentX = cardRect.x + 12f;
+        float contentWidth = Mathf.Max(0f, cardRect.width - 24f);
+        float valueWidth = 62f;
+        float gap = 8f;
+        float labelWidth = Mathf.Max(0f, contentWidth - valueWidth - gap);
+        Rect titleRect = new Rect(contentX, cardRect.y + 10f, labelWidth, 26f);
+        Rect valueRect = new Rect(contentX + labelWidth + gap, cardRect.y + 10f, valueWidth, 26f);
+        Rect descriptionRect = new Rect(contentX, cardRect.y + 40f, contentWidth, 16f);
+        float sliderWellY = hasDescription ? cardRect.y + 58f : cardRect.y + 38f;
+        Rect sliderWellRect = new Rect(contentX, sliderWellY, contentWidth, 20f);
+        Rect sliderRect = new Rect(sliderWellRect.x + 8f, sliderWellRect.y + 1f, Mathf.Max(0f, sliderWellRect.width - 16f), 18f);
+
+        GUI.Label(titleRect, new GUIContent(string.Empty, EnsureOverlaySliderTitleTexture(GetOverlayTexturePixelSize(titleRect.width), GetOverlayTexturePixelSize(titleRect.height)), string.Empty), GUIStyle.none);
+        GUI.Label(new Rect(titleRect.x + 10f, titleRect.y, Mathf.Max(0f, titleRect.width - 20f), titleRect.height), label, titleStyle);
+        if (hasDescription)
+        {
+            GUI.Label(descriptionRect, description!, helpStyle);
+        }
+        GUI.Label(sliderWellRect, new GUIContent(string.Empty, EnsureOverlaySliderWellTexture(GetOverlayTexturePixelSize(sliderWellRect.width), GetOverlayTexturePixelSize(sliderWellRect.height)), string.Empty), GUIStyle.none);
+
+        float updatedValue = RenderOverlayEditorTransparencySlider("animated-menu:" + label, sliderRect, clampedValue, min, max);
+        GUI.Label(valueRect, new GUIContent(string.Empty, EnsureOverlaySliderValueTexture(GetOverlayTexturePixelSize(valueRect.width), GetOverlayTexturePixelSize(valueRect.height)), string.Empty), GUIStyle.none);
+        GUI.Label(valueRect, $"{Mathf.RoundToInt(updatedValue * 100f)}%", valueStyle);
+        if (Math.Abs(updatedValue - clampedValue) >= 0.001f)
+        {
+            applyValue(updatedValue);
+            MarkConfigDirty(affectsGlobalSnapshot: true);
+            if (applyAnimatedMenuTint)
+            {
+                ApplyAnimatedMenuTint();
+            }
+        }
+
+        GUILayout.Label(string.Empty, GUILayout.Height(8f));
+    }
+
+    private float RenderOverlayEditorTransparencySlider(string sliderKey, float value, float width, float min, float max)
+    {
+        Rect sliderRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Width(width), GUILayout.Height(24f));
         sliderRect.width = width;
+        sliderRect.height = 24f;
+        return RenderOverlayEditorTransparencySlider(sliderKey, sliderRect, value, min, max);
+    }
+
+    private float RenderOverlayEditorTransparencySlider(string sliderKey, Rect sliderRect, float value, float min, float max)
+    {
         sliderRect.height = 18f;
 
-        if (_overlayEditorTransparencyDragging && !Input.GetMouseButton(0))
+        if (_overlayEditorActiveSliderKey != null && !Input.GetMouseButton(0))
         {
-            _overlayEditorTransparencyDragging = false;
+            _overlayEditorActiveSliderKey = null;
         }
 
         Event? currentEvent = Event.current;
@@ -1391,45 +2896,45 @@ internal sealed class V1StockTracker
                 case EventType.MouseDown:
                     if (sliderRect.Contains(currentEvent.mousePosition))
                     {
-                        _overlayEditorTransparencyDragging = true;
+                        _overlayEditorActiveSliderKey = sliderKey;
                         currentEvent.Use();
                     }
                     break;
                 case EventType.MouseDrag:
-                    if (_overlayEditorTransparencyDragging)
+                    if (string.Equals(_overlayEditorActiveSliderKey, sliderKey, StringComparison.Ordinal))
                     {
                         currentEvent.Use();
                     }
                     break;
                 case EventType.MouseUp:
-                    if (_overlayEditorTransparencyDragging)
+                    if (string.Equals(_overlayEditorActiveSliderKey, sliderKey, StringComparison.Ordinal))
                     {
-                        _overlayEditorTransparencyDragging = false;
+                        _overlayEditorActiveSliderKey = null;
                         currentEvent.Use();
                     }
                     break;
             }
         }
 
-        if (_overlayEditorTransparencyDragging && currentEvent != null)
+        if (string.Equals(_overlayEditorActiveSliderKey, sliderKey, StringComparison.Ordinal) && currentEvent != null)
         {
             float normalized = Mathf.InverseLerp(sliderRect.x, sliderRect.xMax, currentEvent.mousePosition.x);
             value = Mathf.Lerp(min, max, Mathf.Clamp01(normalized));
         }
 
-        Rect trackRect = new Rect(sliderRect.x, sliderRect.y + 5f, sliderRect.width, 8f);
-        GUI.Label(trackRect, new GUIContent(string.Empty, EnsureOverlaySliderTrackTexture(), string.Empty), GUI.skin.label);
+        Rect trackRect = new Rect(sliderRect.x + 1f, sliderRect.y + 3f, Mathf.Max(0f, sliderRect.width - 2f), 12f);
+        GUI.Label(trackRect, new GUIContent(string.Empty, EnsureOverlaySliderTrackTexture(GetOverlayTexturePixelSize(trackRect.width), GetOverlayTexturePixelSize(trackRect.height)), string.Empty), GUIStyle.none);
 
-        float fillWidth = Mathf.Lerp(0f, Mathf.Max(0f, trackRect.width - 2f), Mathf.InverseLerp(min, max, value));
+        float fillWidth = Mathf.Lerp(0f, Mathf.Max(0f, trackRect.width), Mathf.InverseLerp(min, max, value));
         if (fillWidth > 0f)
         {
-            Rect fillRect = new Rect(trackRect.x + 1f, trackRect.y + 1f, fillWidth, Mathf.Max(0f, trackRect.height - 2f));
-            GUI.Label(fillRect, new GUIContent(string.Empty, EnsureOverlaySliderFillTexture(), string.Empty), GUI.skin.label);
+            Rect fillRect = new Rect(trackRect.x, trackRect.y, fillWidth, trackRect.height);
+            GUI.Label(fillRect, new GUIContent(string.Empty, EnsureOverlaySliderFillTexture(GetOverlayTexturePixelSize(fillRect.width), GetOverlayTexturePixelSize(fillRect.height)), string.Empty), GUIStyle.none);
         }
 
-        float knobX = Mathf.Lerp(trackRect.x - 2f, trackRect.xMax - 14f, Mathf.InverseLerp(min, max, value));
-        Rect knobRect = new Rect(knobX, sliderRect.y, 14f, 18f);
-        GUI.Label(knobRect, new GUIContent(string.Empty, EnsureOverlaySliderKnobTexture(), string.Empty), GUI.skin.label);
+        float knobCenterX = Mathf.Lerp(trackRect.x, trackRect.xMax, Mathf.InverseLerp(min, max, value));
+        Rect knobRect = new Rect(knobCenterX - 12f, sliderRect.y - 3f, 24f, 24f);
+        GUI.Label(knobRect, new GUIContent(string.Empty, EnsureOverlaySliderKnobTexture(), string.Empty), GUIStyle.none);
 
         return Mathf.Clamp(value, min, max);
     }
@@ -1460,6 +2965,11 @@ internal sealed class V1StockTracker
         if (string.Equals(panelKey, "editor", StringComparison.Ordinal))
         {
             Texture2D panelTexture = EnsureOverlayEditorPanelTexture(rect, panelAlpha);
+            GUI.Label(rect, new GUIContent(string.Empty, panelTexture, string.Empty), GUI.skin.label);
+        }
+        else if (string.Equals(panelKey, "export-templates", StringComparison.Ordinal))
+        {
+            Texture2D panelTexture = EnsureOverlayExportTemplatePanelTexture(rect);
             GUI.Label(rect, new GUIContent(string.Empty, panelTexture, string.Empty), GUI.skin.label);
         }
         else
@@ -1548,21 +3058,104 @@ internal sealed class V1StockTracker
         return _overlayEditorPanelTexture;
     }
 
-    private Texture2D EnsureOverlaySliderTrackTexture()
+    private Texture2D EnsureOverlayExportTemplatePanelTexture(Rect rect)
     {
-        if (_overlaySliderTrackTexture == null)
+        int width = Math.Max(1, Mathf.RoundToInt(rect.width));
+        int height = Math.Max(1, Mathf.RoundToInt(rect.height));
+        if (_overlayExportTemplatePanelTexture != null &&
+            _overlayExportTemplatePanelTextureWidth == width &&
+            _overlayExportTemplatePanelTextureHeight == height)
         {
-            _overlaySliderTrackTexture = BuildSolidTexture(new Color(0f, 0f, 0f, 0.55f));
+            return _overlayExportTemplatePanelTexture;
+        }
+
+        _overlayExportTemplatePanelTextureWidth = width;
+        _overlayExportTemplatePanelTextureHeight = height;
+        _overlayExportTemplatePanelTexture = new Texture2D(width, height, TextureFormat.ARGB32, false);
+        Color fillColor = new Color(0f, 0f, 0f, 0.96f);
+        Color headerColor = new Color(0.02f, 0.02f, 0.02f, 0.98f);
+        Color borderColor = new Color(0.14f, 0.27f, 0.42f, 0.96f);
+        Color dividerColor = new Color(0.08f, 0.18f, 0.28f, 0.92f);
+        Color[] pixels = new Color[width * height];
+        int headerHeight = Math.Min(28, height);
+        int radius = Math.Min(10, Math.Min(width, height) / 6);
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int pixelIndex = (y * width) + x;
+                if (IsOutsideRoundedCorner(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = new Color(0f, 0f, 0f, 0f);
+                    continue;
+                }
+
+                bool isBorder = IsRoundedBorderPixel(x, y, width, height, radius);
+                bool isHeaderDivider = y == height - headerHeight - 1;
+                if (isBorder)
+                {
+                    pixels[pixelIndex] = borderColor;
+                }
+                else if (isHeaderDivider)
+                {
+                    pixels[pixelIndex] = dividerColor;
+                }
+                else if (y >= height - headerHeight)
+                {
+                    pixels[pixelIndex] = headerColor;
+                }
+                else
+                {
+                    pixels[pixelIndex] = fillColor;
+                }
+            }
+        }
+
+        _overlayExportTemplatePanelTexture.SetPixels(0, 0, width, height, pixels);
+        _overlayExportTemplatePanelTexture.filterMode = FilterMode.Bilinear;
+        _overlayExportTemplatePanelTexture.wrapMode = TextureWrapMode.Clamp;
+        _overlayExportTemplatePanelTexture.Apply();
+        return _overlayExportTemplatePanelTexture;
+    }
+
+    private Texture2D EnsureOverlaySliderTrackTexture(int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderTrackTexture == null
+            || _overlaySliderTrackTextureWidth != width
+            || _overlaySliderTrackTextureHeight != height)
+        {
+            _overlaySliderTrackTexture = BuildRoundedRectTexture(
+                width,
+                height,
+                Math.Max(1, height / 2),
+                new Color(0.03f, 0.07f, 0.13f, 0.98f),
+                new Color(0.17f, 0.27f, 0.42f, 0.95f));
+            _overlaySliderTrackTextureWidth = width;
+            _overlaySliderTrackTextureHeight = height;
         }
 
         return _overlaySliderTrackTexture;
     }
 
-    private Texture2D EnsureOverlaySliderFillTexture()
+    private Texture2D EnsureOverlaySliderFillTexture(int width, int height)
     {
-        if (_overlaySliderFillTexture == null)
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderFillTexture == null
+            || _overlaySliderFillTextureWidth != width
+            || _overlaySliderFillTextureHeight != height)
         {
-            _overlaySliderFillTexture = BuildSolidTexture(new Color(0.2f, 0.72f, 0.9f, 0.75f));
+            _overlaySliderFillTexture = BuildHorizontalGradientRoundedTexture(
+                width,
+                height,
+                Math.Max(1, height / 2),
+                new Color(0.04f, 0.36f, 0.88f, 0.99f),
+                new Color(0.16f, 0.63f, 1f, 0.99f),
+                new Color(0.44f, 0.82f, 1f, 0.94f));
+            _overlaySliderFillTextureWidth = width;
+            _overlaySliderFillTextureHeight = height;
         }
 
         return _overlaySliderFillTexture;
@@ -1572,39 +3165,49 @@ internal sealed class V1StockTracker
     {
         if (_overlaySliderKnobTexture == null)
         {
-            const int width = 14;
-            const int height = 18;
+            const int width = 24;
+            const int height = 24;
             Texture2D texture = new Texture2D(width, height, TextureFormat.ARGB32, false);
             Color[] pixels = new Color[width * height];
             Vector2 center = new Vector2((width - 1) * 0.5f, (height - 1) * 0.5f);
-            float radiusX = (width - 2) * 0.5f;
-            float radiusY = (height - 2) * 0.5f;
-            Color fillColor = new Color(0.92f, 0.97f, 1f, 0.98f);
-            Color edgeColor = new Color(0.1f, 0.16f, 0.2f, 0.92f);
+            float shadowRadius = (width - 1) * 0.5f;
+            float radius = (width - 5) * 0.5f;
+            Color fillColor = new Color(0.14f, 0.54f, 0.98f, 0.99f);
+            Color highlightColor = new Color(0.57f, 0.87f, 1f, 0.99f);
+            Color edgeColor = new Color(0.03f, 0.18f, 0.43f, 0.98f);
+            Color shadowColor = new Color(0f, 0f, 0f, 0.24f);
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
                 {
-                    float dx = (x - center.x) / Math.Max(0.001f, radiusX);
-                    float dy = (y - center.y) / Math.Max(0.001f, radiusY);
-                    float distance = (dx * dx) + (dy * dy);
+                    float dx = x - center.x;
+                    float dy = y - center.y;
+                    float distance = Mathf.Sqrt((dx * dx) + (dy * dy));
                     int pixelIndex = (y * width) + x;
-                    if (distance > 1.06f)
+                    if (distance > shadowRadius)
                     {
                         pixels[pixelIndex] = new Color(0f, 0f, 0f, 0f);
                     }
-                    else if (distance > 0.78f)
+                    else if (distance > radius + 1.5f)
+                    {
+                        float shadowAlpha = Mathf.InverseLerp(shadowRadius, radius + 1.5f, distance) * shadowColor.a;
+                        pixels[pixelIndex] = new Color(shadowColor.r, shadowColor.g, shadowColor.b, shadowAlpha);
+                    }
+                    else if (distance > radius - 1f)
                     {
                         pixels[pixelIndex] = edgeColor;
                     }
                     else
                     {
-                        pixels[pixelIndex] = fillColor;
+                        float highlight = Mathf.Clamp01((center.y - y) / Math.Max(1f, radius));
+                        pixels[pixelIndex] = Color.Lerp(fillColor, highlightColor, highlight * 0.45f);
                     }
                 }
             }
 
             texture.SetPixels(0, 0, width, height, pixels);
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.filterMode = FilterMode.Bilinear;
             texture.Apply();
             _overlaySliderKnobTexture = texture;
         }
@@ -1612,12 +3215,357 @@ internal sealed class V1StockTracker
         return _overlaySliderKnobTexture;
     }
 
+    private Texture2D EnsureOverlaySliderCardTexture(int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderCardTexture == null
+            || _overlaySliderCardTextureWidth != width
+            || _overlaySliderCardTextureHeight != height)
+        {
+            _overlaySliderCardTexture = BuildVerticalGradientRoundedTexture(
+                width,
+                height,
+                Math.Max(6, Math.Min(width, height) / 7),
+                new Color(0.03f, 0.08f, 0.14f, 0.86f),
+                new Color(0.02f, 0.06f, 0.11f, 0.82f),
+                new Color(0.16f, 0.29f, 0.45f, 0.95f));
+            _overlaySliderCardTextureWidth = width;
+            _overlaySliderCardTextureHeight = height;
+        }
+
+        return _overlaySliderCardTexture;
+    }
+
+    private Texture2D EnsureOverlaySliderWellTexture(int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderWellTexture == null
+            || _overlaySliderWellTextureWidth != width
+            || _overlaySliderWellTextureHeight != height)
+        {
+            _overlaySliderWellTexture = BuildRoundedRectTexture(
+                width,
+                height,
+                Math.Max(1, height / 2),
+                new Color(0.02f, 0.05f, 0.1f, 0.98f),
+                new Color(0.14f, 0.24f, 0.39f, 0.95f));
+            _overlaySliderWellTextureWidth = width;
+            _overlaySliderWellTextureHeight = height;
+        }
+
+        return _overlaySliderWellTexture;
+    }
+
+    private Texture2D EnsureOverlaySliderTitleTexture(int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderTitleTexture == null
+            || _overlaySliderTitleTextureWidth != width
+            || _overlaySliderTitleTextureHeight != height)
+        {
+            _overlaySliderTitleTexture = BuildRoundedRectTexture(
+                width,
+                height,
+                Math.Max(6, Math.Min(width, height) / 3),
+                new Color(0.06f, 0.12f, 0.2f, 0.92f),
+                new Color(0.18f, 0.31f, 0.47f, 0.94f));
+            _overlaySliderTitleTextureWidth = width;
+            _overlaySliderTitleTextureHeight = height;
+        }
+
+        return _overlaySliderTitleTexture;
+    }
+
+    private Texture2D EnsureOverlaySliderValueTexture(int width, int height)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+        if (_overlaySliderValueTexture == null
+            || _overlaySliderValueTextureWidth != width
+            || _overlaySliderValueTextureHeight != height)
+        {
+            _overlaySliderValueTexture = BuildRoundedRectTexture(
+                width,
+                height,
+                Math.Max(6, Math.Min(width, height) / 3),
+                new Color(0.07f, 0.29f, 0.62f, 0.97f),
+                new Color(0.34f, 0.67f, 0.98f, 0.97f));
+            _overlaySliderValueTextureWidth = width;
+            _overlaySliderValueTextureHeight = height;
+        }
+
+        return _overlaySliderValueTexture;
+    }
+
+    private Texture2D EnsureOverlaySliderDividerTexture()
+    {
+        if (_overlaySliderDividerTexture == null)
+        {
+            _overlaySliderDividerTexture = BuildSolidTexture(new Color(0.16f, 0.33f, 0.52f, 0.38f));
+        }
+
+        return _overlaySliderDividerTexture;
+    }
+
+    private static int GetOverlayTexturePixelSize(float guiSize)
+    {
+        float scale = 1f;
+        if (GuiPixelsPerPointProperty != null)
+        {
+            try
+            {
+                object? value = GuiPixelsPerPointProperty.GetValue(null, null);
+                if (value is float floatValue && floatValue > 0.01f)
+                {
+                    scale = floatValue;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return Math.Max(1, Mathf.CeilToInt(guiSize * scale));
+    }
+
     private static Texture2D BuildSolidTexture(Color color)
     {
         Texture2D texture = new Texture2D(1, 1, TextureFormat.ARGB32, false);
         texture.SetPixels(0, 0, 1, 1, new[] { color });
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = FilterMode.Bilinear;
         texture.Apply();
         return texture;
+    }
+
+    private static Texture2D BuildRoundedRectTexture(int width, int height, int radius, Color fillColor, Color borderColor)
+    {
+        Texture2D texture = new Texture2D(width, height, TextureFormat.ARGB32, false);
+        Color[] pixels = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int pixelIndex = (y * width) + x;
+                if (IsOutsideRoundedCorner(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = new Color(0f, 0f, 0f, 0f);
+                }
+                else if (IsRoundedBorderPixel(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = borderColor;
+                }
+                else
+                {
+                    pixels[pixelIndex] = fillColor;
+                }
+            }
+        }
+
+        texture.SetPixels(0, 0, width, height, pixels);
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = FilterMode.Bilinear;
+        texture.Apply();
+        return texture;
+    }
+
+    private static Texture2D BuildHorizontalGradientRoundedTexture(int width, int height, int radius, Color leftColor, Color rightColor, Color borderColor)
+    {
+        Texture2D texture = new Texture2D(width, height, TextureFormat.ARGB32, false);
+        Color[] pixels = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int pixelIndex = (y * width) + x;
+                if (IsOutsideRoundedCorner(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = new Color(0f, 0f, 0f, 0f);
+                }
+                else if (IsRoundedBorderPixel(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = borderColor;
+                }
+                else
+                {
+                    float t = width <= 1 ? 0f : x / (float)(width - 1);
+                    pixels[pixelIndex] = Color.Lerp(leftColor, rightColor, t);
+                }
+            }
+        }
+
+        texture.SetPixels(0, 0, width, height, pixels);
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = FilterMode.Bilinear;
+        texture.Apply();
+        return texture;
+    }
+
+    private static Texture2D BuildVerticalGradientRoundedTexture(int width, int height, int radius, Color topColor, Color bottomColor, Color borderColor)
+    {
+        Texture2D texture = new Texture2D(width, height, TextureFormat.ARGB32, false);
+        Color[] pixels = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            float t = height <= 1 ? 0f : y / (float)(height - 1);
+            Color rowColor = Color.Lerp(topColor, bottomColor, t);
+            for (int x = 0; x < width; x++)
+            {
+                int pixelIndex = (y * width) + x;
+                if (IsOutsideRoundedCorner(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = new Color(0f, 0f, 0f, 0f);
+                }
+                else if (IsRoundedBorderPixel(x, y, width, height, radius))
+                {
+                    pixels[pixelIndex] = borderColor;
+                }
+                else
+                {
+                    pixels[pixelIndex] = rowColor;
+                }
+            }
+        }
+
+        texture.SetPixels(0, 0, width, height, pixels);
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = FilterMode.Bilinear;
+        texture.Apply();
+        return texture;
+    }
+
+    private Texture2D EnsureAnimatedMenuWispTexture()
+    {
+        if (_animatedMenuWispTexture != null)
+        {
+            return _animatedMenuWispTexture;
+        }
+
+        const int size = 256;
+        Texture2D texture = new Texture2D(size, size, TextureFormat.ARGB32, false)
+        {
+            wrapMode = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Bilinear
+        };
+
+        Color[] pixels = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        {
+            float v = (y + 0.5f) / size;
+            for (int x = 0; x < size; x++)
+            {
+                float u = (x + 0.5f) / size;
+                float alpha = EvaluateAnimatedMenuWispAlpha(u, v);
+                pixels[(y * size) + x] = new Color(1f, 1f, 1f, alpha);
+            }
+        }
+
+        texture.SetPixels(0, 0, size, size, pixels);
+        texture.Apply();
+        _animatedMenuWispTexture = texture;
+        return texture;
+    }
+
+    private static float EvaluateAnimatedMenuWispAlpha(float u, float v)
+    {
+        float warpA = (FractalTileableNoise(u + 0.13f, v + 0.41f, 3, 3) - 0.5f) * 0.28f;
+        float warpB = (FractalTileableNoise(u + 0.67f, v + 0.23f, 4, 3) - 0.5f) * 0.2f;
+        float broadField = FractalTileableNoise((u + warpA) * 1.45f, (v + warpB) * 0.8f, 4, 5);
+        float narrowField = FractalTileableNoise((u - warpB) * 3.6f, (v + warpA) * 1.9f, 5, 4);
+        float ridgeField = 1f - Mathf.Abs(narrowField * 2f - 1f);
+
+        float body = Mathf.Clamp01((broadField - 0.42f) / 0.28f);
+        body = Mathf.Pow(body, 1.2f);
+        float strands = Mathf.Clamp01((ridgeField - 0.34f) / 0.46f);
+        strands = Mathf.Pow(strands, 1.55f);
+
+        float wisps = Mathf.Clamp01((body * 0.75f) + (body * strands * 1.15f));
+        wisps = Mathf.SmoothStep(0.02f, 0.94f, wisps);
+        return Mathf.Clamp01(wisps);
+    }
+
+    private static float FractalTileableNoise(float u, float v, int basePeriod, int octaves)
+    {
+        float total = 0f;
+        float amplitude = 1f;
+        float amplitudeSum = 0f;
+        int period = Math.Max(1, basePeriod);
+        for (int octave = 0; octave < octaves; octave++)
+        {
+            total += TileableValueNoise(u * period, v * period, period) * amplitude;
+            amplitudeSum += amplitude;
+            amplitude *= 0.5f;
+            period *= 2;
+        }
+
+        return amplitudeSum > 0.0001f ? total / amplitudeSum : 0f;
+    }
+
+    private static float TileableValueNoise(float x, float y, int period)
+    {
+        int x0 = Mathf.FloorToInt(x);
+        int y0 = Mathf.FloorToInt(y);
+        int x1 = x0 + 1;
+        int y1 = y0 + 1;
+        float tx = x - x0;
+        float ty = y - y0;
+        tx = tx * tx * (3f - (2f * tx));
+        ty = ty * ty * (3f - (2f * ty));
+
+        float v00 = HashToUnitFloat(PositiveMod(x0, period), PositiveMod(y0, period));
+        float v10 = HashToUnitFloat(PositiveMod(x1, period), PositiveMod(y0, period));
+        float v01 = HashToUnitFloat(PositiveMod(x0, period), PositiveMod(y1, period));
+        float v11 = HashToUnitFloat(PositiveMod(x1, period), PositiveMod(y1, period));
+
+        float a = Mathf.Lerp(v00, v10, tx);
+        float b = Mathf.Lerp(v01, v11, tx);
+        return Mathf.Lerp(a, b, ty);
+    }
+
+    private static int PositiveMod(int value, int divisor)
+    {
+        if (divisor <= 0)
+        {
+            return 0;
+        }
+
+        int result = value % divisor;
+        return result < 0 ? result + divisor : result;
+    }
+
+    private static float HashToUnitFloat(int x, int y)
+    {
+        unchecked
+        {
+            uint hash = 2166136261u;
+            hash = (hash ^ (uint)x) * 16777619u;
+            hash = (hash ^ (uint)y) * 16777619u;
+            hash += hash << 13;
+            hash ^= hash >> 7;
+            hash += hash << 3;
+            hash ^= hash >> 17;
+            hash += hash << 5;
+            return (hash & 0x00FFFFFF) / 16777215f;
+        }
+    }
+
+    private Texture2D EnsureAnimatedMenuOnGuiOverlayTexture(Color color)
+    {
+        if (_animatedMenuOnGuiOverlayTexture != null &&
+            Mathf.Abs(_animatedMenuOnGuiOverlayTextureColor.r - color.r) < 0.001f &&
+            Mathf.Abs(_animatedMenuOnGuiOverlayTextureColor.g - color.g) < 0.001f &&
+            Mathf.Abs(_animatedMenuOnGuiOverlayTextureColor.b - color.b) < 0.001f &&
+            Mathf.Abs(_animatedMenuOnGuiOverlayTextureColor.a - color.a) < 0.001f)
+        {
+            return _animatedMenuOnGuiOverlayTexture;
+        }
+
+        _animatedMenuOnGuiOverlayTextureColor = color;
+        _animatedMenuOnGuiOverlayTexture = BuildSolidTexture(color);
+        return _animatedMenuOnGuiOverlayTexture;
     }
 
     private void DrawResizeCornerIndicator(Rect rect, Color color)
@@ -1920,6 +3868,11 @@ internal sealed class V1StockTracker
             return new Vector2(340f, 300f);
         }
 
+        if (string.Equals(panelKey, "export-templates", StringComparison.Ordinal))
+        {
+            return new Vector2(840f, 520f);
+        }
+
         return new Vector2(180f, 74f);
     }
 
@@ -2039,10 +3992,43 @@ internal sealed class V1StockTracker
         return _config.OverlayEditor;
     }
 
+    private ExportTemplateEditorConfig EnsureExportTemplateEditorConfig()
+    {
+        _config.ExportTemplateEditor ??= new ExportTemplateEditorConfig();
+        return _config.ExportTemplateEditor;
+    }
+
     private Dictionary<string, bool> EnsureDefaultEnabledTextExports()
     {
         _config.DefaultEnabledTextExports ??= new Dictionary<string, bool>(StringComparer.Ordinal);
         return _config.DefaultEnabledTextExports;
+    }
+
+    private Dictionary<string, string> EnsureExportTemplateOverrides()
+    {
+        _config.ExportTemplateOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        return _config.ExportTemplateOverrides;
+    }
+
+    private void NormalizeLoadedExportTemplateOverrides()
+    {
+        Dictionary<string, string> normalized = new(StringComparer.Ordinal);
+        if (_config.ExportTemplateOverrides != null)
+        {
+            foreach (KeyValuePair<string, string> pair in _config.ExportTemplateOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key))
+                {
+                    continue;
+                }
+
+                normalized[pair.Key] = pair.Value ?? string.Empty;
+            }
+        }
+
+        _config.ExportTemplateOverrides = normalized;
+        _compiledExportTemplatesVersion = -1;
+        _loggedInvalidTemplateSources.Clear();
     }
 
     private EnabledTextExportSnapshot GetEnabledTextExportsSnapshot()
@@ -2074,7 +4060,34 @@ internal sealed class V1StockTracker
         return new Rect(x, y, width, height);
     }
 
+    private static Rect GetEditorRect(ExportTemplateEditorConfig config)
+    {
+        float width = config.Width > 0f ? config.Width : 960f;
+        float height = config.Height > 0f ? config.Height : 680f;
+        float x = Mathf.Clamp(config.X, 0f, Mathf.Max(0f, Screen.width - width));
+        float y = config.Y >= 0f ? config.Y : Mathf.Max(20f, Screen.height * 0.12f);
+        y = Mathf.Clamp(y, 0f, Mathf.Max(0f, Screen.height - height));
+        return new Rect(x, y, width, height);
+    }
+
     private void PersistEditorRect(OverlayEditorConfig config, Rect rect)
+    {
+        if (Math.Abs(config.X - rect.x) < 0.01f &&
+            Math.Abs(config.Y - rect.y) < 0.01f &&
+            Math.Abs(config.Width - rect.width) < 0.01f &&
+            Math.Abs(config.Height - rect.height) < 0.01f)
+        {
+            return;
+        }
+
+        config.X = rect.x;
+        config.Y = rect.y;
+        config.Width = rect.width;
+        config.Height = rect.height;
+        MarkConfigDirty(affectsGlobalSnapshot: true);
+    }
+
+    private void PersistEditorRect(ExportTemplateEditorConfig config, Rect rect)
     {
         if (Math.Abs(config.X - rect.x) < 0.01f &&
             Math.Abs(config.Y - rect.y) < 0.01f &&
@@ -2216,14 +4229,65 @@ internal sealed class V1StockTracker
         _overlayColorPickerRect = new Rect(desiredX, desiredY, width, height);
     }
 
-    private void RenderOverlayColorPicker(SongConfig songConfig)
+    private void OpenAnimatedMenuColorPicker(Rect panelRect)
+    {
+        _overlayColorTargetKey = AnimatedMenuColorPickerTargetKey;
+        _overlayColorPickerDragging = false;
+        Color currentColor = GetAnimatedMenuTintColor();
+        RgbToHsv(currentColor, out _overlayColorPickerHue, out _overlayColorPickerSaturation, out _overlayColorPickerValue);
+        if (_overlayColorPickerValue <= 0.01f)
+        {
+            _overlayColorPickerValue = 1f;
+        }
+
+        float width = 220f;
+        float height = 292f;
+        float desiredX = panelRect.xMax + 12f;
+        if (desiredX + width > Screen.width)
+        {
+            desiredX = Mathf.Max(0f, panelRect.x - width - 12f);
+        }
+
+        float desiredY = Mathf.Clamp(panelRect.y, 0f, Mathf.Max(0f, Screen.height - height));
+        _overlayColorPickerRect = new Rect(desiredX, desiredY, width, height);
+    }
+
+    private void OpenAnimatedMenuWispColorPicker(Rect panelRect)
+    {
+        _overlayColorTargetKey = AnimatedMenuWispColorPickerTargetKey;
+        _overlayColorPickerDragging = false;
+        Color currentColor = GetAnimatedMenuWispColor();
+        RgbToHsv(currentColor, out _overlayColorPickerHue, out _overlayColorPickerSaturation, out _overlayColorPickerValue);
+        if (_overlayColorPickerValue <= 0.01f)
+        {
+            _overlayColorPickerValue = 1f;
+        }
+
+        float width = 220f;
+        float height = 292f;
+        float desiredX = panelRect.xMax + 12f;
+        if (desiredX + width > Screen.width)
+        {
+            desiredX = Mathf.Max(0f, panelRect.x - width - 12f);
+        }
+
+        float desiredY = Mathf.Clamp(panelRect.y, 0f, Mathf.Max(0f, Screen.height - height));
+        _overlayColorPickerRect = new Rect(desiredX, desiredY, width, height);
+    }
+
+    private void RenderOverlayColorPicker(SongConfig? songConfig)
     {
         bool editingDesktopBorder = string.Equals(_overlayColorTargetKey, "desktop:border", StringComparison.Ordinal);
+        bool editingAnimatedMenu = string.Equals(_overlayColorTargetKey, AnimatedMenuColorPickerTargetKey, StringComparison.Ordinal);
+        bool editingAnimatedMenuWisp = string.Equals(_overlayColorTargetKey, AnimatedMenuWispColorPickerTargetKey, StringComparison.Ordinal);
         OverlayWidgetConfig? widgetConfig = null;
         string targetKey = _overlayColorTargetKey ?? string.Empty;
         if (string.IsNullOrWhiteSpace(targetKey) ||
             (!editingDesktopBorder &&
+             !editingAnimatedMenu &&
+             !editingAnimatedMenuWisp &&
              (!targetKey.StartsWith("widget:", StringComparison.Ordinal) ||
+              songConfig == null ||
               !songConfig.OverlayWidgets.TryGetValue(targetKey.Substring("widget:".Length), out widgetConfig))))
         {
             _overlayColorTargetKey = null;
@@ -2245,7 +4309,14 @@ internal sealed class V1StockTracker
         EnsureColorWheelTexture();
 
         GUI.Box(_overlayColorPickerRect, GUIContent.none, GUI.skin.box);
-        GUI.Label(new Rect(_overlayColorPickerRect.x + 8f, _overlayColorPickerRect.y + 6f, _overlayColorPickerRect.width - 16f, 20f), editingDesktopBorder ? "Widget Border Color" : "Overlay Color", GUI.skin.label);
+        string pickerTitle = editingDesktopBorder
+            ? "Widget Border Color"
+            : editingAnimatedMenu
+                ? "Animated Menu Tint"
+                : editingAnimatedMenuWisp
+                    ? "Animated Menu Wisps"
+                : "Overlay Color";
+        GUI.Label(new Rect(_overlayColorPickerRect.x + 8f, _overlayColorPickerRect.y + 6f, _overlayColorPickerRect.width - 16f, 20f), pickerTitle, GUI.skin.label);
 
         Rect wheelRect = new Rect(_overlayColorPickerRect.x + 10f, _overlayColorPickerRect.y + 30f, 160f, 160f);
         Rect previewRect = new Rect(_overlayColorPickerRect.x + 10f, _overlayColorPickerRect.y + 198f, _overlayColorPickerRect.width - 20f, 24f);
@@ -2264,14 +4335,14 @@ internal sealed class V1StockTracker
                 wheelRect.Contains(currentEvent.mousePosition))
             {
                 _overlayColorPickerDragging = true;
-                UpdateOverlayColorFromWheel(widgetConfig, editingDesktopBorder, wheelRect, currentEvent.mousePosition);
+                UpdateOverlayColorFromWheel(widgetConfig, editingDesktopBorder, editingAnimatedMenu, editingAnimatedMenuWisp, wheelRect, currentEvent.mousePosition);
                 currentEvent.Use();
             }
             else if (currentEvent.type == EventType.MouseDrag &&
                 _overlayColorPickerDragging &&
                 Input.GetMouseButton(0))
             {
-                UpdateOverlayColorFromWheel(widgetConfig, editingDesktopBorder, wheelRect, currentEvent.mousePosition);
+                UpdateOverlayColorFromWheel(widgetConfig, editingDesktopBorder, editingAnimatedMenu, editingAnimatedMenuWisp, wheelRect, currentEvent.mousePosition);
                 currentEvent.Use();
             }
             else if (currentEvent.type == EventType.MouseUp || !Input.GetMouseButton(0))
@@ -2293,6 +4364,22 @@ internal sealed class V1StockTracker
             };
             GUI.Label(previewRect, "Press Home/F8/Ctrl+O to preview", previewStyle);
         }
+        else if (editingAnimatedMenu)
+        {
+            GUIStyle previewStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter
+            };
+            GUI.Label(previewRect, "Live on the main menu when Animated is selected", previewStyle);
+        }
+        else if (editingAnimatedMenuWisp)
+        {
+            GUIStyle previewStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter
+            };
+            GUI.Label(previewRect, "Colors the live wisps behind the controls", previewStyle);
+        }
 
         bool confirmClicked = GUI.Toggle(confirmRect, false, new GUIContent("CONFIRM"), GUI.skin.button);
         if (confirmClicked)
@@ -2302,7 +4389,7 @@ internal sealed class V1StockTracker
         }
     }
 
-    private void UpdateOverlayColorFromWheel(OverlayWidgetConfig? config, bool editingDesktopBorder, Rect wheelRect, Vector2 mousePosition)
+    private void UpdateOverlayColorFromWheel(OverlayWidgetConfig? config, bool editingDesktopBorder, bool editingAnimatedMenu, bool editingAnimatedMenuWisp, Rect wheelRect, Vector2 mousePosition)
     {
         Vector2 center = new Vector2(wheelRect.x + wheelRect.width * 0.5f, wheelRect.y + wheelRect.height * 0.5f);
         Vector2 offset = mousePosition - center;
@@ -2327,10 +4414,10 @@ internal sealed class V1StockTracker
 
         _overlayColorPickerHue = hue;
         _overlayColorPickerSaturation = saturation;
-        ApplyOverlayColor(config, editingDesktopBorder);
+        ApplyOverlayColor(config, editingDesktopBorder, editingAnimatedMenu, editingAnimatedMenuWisp);
     }
 
-    private void ApplyOverlayColor(OverlayWidgetConfig? config, bool editingDesktopBorder)
+    private void ApplyOverlayColor(OverlayWidgetConfig? config, bool editingDesktopBorder, bool editingAnimatedMenu, bool editingAnimatedMenuWisp)
     {
         Color color = HsvToRgb(_overlayColorPickerHue, _overlayColorPickerSaturation, _overlayColorPickerValue);
         if (editingDesktopBorder)
@@ -2343,13 +4430,28 @@ internal sealed class V1StockTracker
             _mergedDesktopOverlayStyle.BorderB = color.b;
             SaveDesktopOverlayStyle();
         }
+        else if (editingAnimatedMenu)
+        {
+            _config.AnimatedMenuTintR = color.r;
+            _config.AnimatedMenuTintG = color.g;
+            _config.AnimatedMenuTintB = color.b;
+            _config.AnimatedMenuTintA = 1f;
+            ApplyAnimatedMenuTint();
+        }
+        else if (editingAnimatedMenuWisp)
+        {
+            _config.AnimatedMenuWispR = color.r;
+            _config.AnimatedMenuWispG = color.g;
+            _config.AnimatedMenuWispB = color.b;
+            ApplyAnimatedMenuTint();
+        }
         else if (config != null)
         {
             config.BackgroundR = color.r;
             config.BackgroundG = color.g;
             config.BackgroundB = color.b;
         }
-        MarkConfigDirty(affectsGlobalSnapshot: editingDesktopBorder);
+        MarkConfigDirty(affectsGlobalSnapshot: editingDesktopBorder || editingAnimatedMenu || editingAnimatedMenuWisp);
         _overlayColorWheelTextureValue = -1f;
     }
 
@@ -2926,18 +5028,19 @@ internal sealed class V1StockTracker
         _obsDir = Path.Combine(_dataDir, "obs");
         _obsStatePath = Path.Combine(_obsDir, "state.json");
         Directory.CreateDirectory(_dataDir);
+        _globalVariablesType = assemblyCSharp.GetType(GlobalVariablesTypeName);
+        _basePlayerType = assemblyCSharp.GetType(BasePlayerTypeName);
+        _gameSettingType = Type.GetType("StrikeCore.GameSetting, StrikeCore", throwOnError: false);
         Directory.CreateDirectory(_obsDir);
         EnsureExportWorkerStarted();
         _memory = LoadJson(_memoryPath, new TrackerMemory());
         _config = LoadJson(_configPath, new TrackerConfig());
         RefreshMergedDesktopOverlayStyle();
+        NormalizeLoadedExportTemplateOverrides();
         _memoryDirty = !File.Exists(_memoryPath);
         _configDirty = !File.Exists(_configPath);
         _latestState = CreateIdleState();
         _overlayEditorVisible = false;
-        _globalVariablesType = assemblyCSharp.GetType(GlobalVariablesTypeName);
-        _basePlayerType = assemblyCSharp.GetType(BasePlayerTypeName);
-        _gameSettingType = Type.GetType("StrikeCore.GameSetting, StrikeCore", throwOnError: false);
         SaveDesktopOverlayStyle();
         SaveConfig();
         SaveMemory();
@@ -2986,6 +5089,8 @@ internal sealed class V1StockTracker
         _gameSettingCurrentValueProperty ??= _gameSettingType?.GetProperty("CurrentValue", AnyInstance);
         _gameSettingPercentStringProperty ??= _gameSettingType?.GetProperty("GetPercentString", AnyInstance);
         _songSpeedSettingField ??= FindSongSpeedSettingField();
+        _menuBackgroundSettingField ??= FindMenuBackgroundSettingField();
+        _blackMenuType ??= _gameManagerType.Assembly.GetType("BlackMenu");
 
         if (_controllerField?.FieldType != null)
         {
@@ -4316,7 +6421,7 @@ internal sealed class V1StockTracker
         _dirtyMemorySongKeys.Add(dirtySongKey!);
     }
 
-    private void MarkConfigDirty(string? songKey = null, bool affectsSectionSnapshots = false, bool affectsTextExports = false, bool affectsGlobalSnapshot = false)
+    private void MarkConfigDirty(string? songKey = null, bool affectsSectionSnapshots = false, bool affectsTextExports = false, bool affectsGlobalSnapshot = false, bool affectsExportTemplates = false)
     {
         _configDirty = true;
         _configVersion++;
@@ -4330,6 +6435,11 @@ internal sealed class V1StockTracker
         {
             _enabledTextExportsVersion++;
             _enabledTextExportSnapshotVersion = -1;
+        }
+
+        if (affectsExportTemplates)
+        {
+            _exportTemplateVersion++;
         }
 
         string? configKey = songKey ?? TryGetActiveSongConfigKey();
@@ -6457,6 +8567,54 @@ internal sealed class V1StockTracker
         return null;
     }
 
+    private FieldInfo? FindMenuBackgroundSettingField()
+    {
+        if (_gameManagerType?.Assembly == null || _gameSettingType == null || _gameSettingNameField == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            foreach (Type type in _gameManagerType.Assembly.GetTypes())
+            {
+                foreach (FieldInfo field in type.GetFields(AnyStatic))
+                {
+                    if (field.FieldType != _gameSettingType)
+                    {
+                        continue;
+                    }
+
+                    object? value = null;
+                    try
+                    {
+                        value = field.GetValue(null);
+                    }
+                    catch
+                    {
+                    }
+
+                    if (value == null)
+                    {
+                        continue;
+                    }
+
+                    string? settingName = _gameSettingNameField.GetValue(value) as string;
+                    if (string.Equals(settingName, MenuBackgroundSettingName, StringComparison.Ordinal))
+                    {
+                        return field;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write($"MenuBackgroundSettingResolveFailure | {ex.Message}");
+        }
+
+        return null;
+    }
+
     private SongMemory EnsureSongMemory(SongDescriptor song, IEnumerable<SectionDescriptor> sections)
     {
         List<SectionDescriptor> sectionList = sections.ToList();
@@ -6648,8 +8806,17 @@ internal sealed class V1StockTracker
         _overlayResetConfirmKey = null;
         _overlayResetConfirmExpiresAt = 0f;
         _wipeAllDataConfirmExpiresAt = 0f;
+        _exportTemplateEditorVisible = false;
+        _selectedExportTemplateId = null;
+        _exportTemplateEditorDrafts.Clear();
+        _compiledExportTemplates.Clear();
+        _compiledExportTemplatesVersion = -1;
+        _workerCompiledExportTemplates.Clear();
+        _workerCompiledExportTemplatesVersion = -1;
+        _loggedInvalidTemplateSources.Clear();
         _memoryVersion++;
         _configVersion++;
+        _exportTemplateVersion++;
         _sectionMemoryVersion++;
         _sectionConfigVersion++;
         _overlayConfigVersion++;
@@ -7378,7 +9545,9 @@ internal sealed class V1StockTracker
             {
                 State = state,
                 ExportStateJson = exportStateJson,
-                ExportObs = exportObs
+                ExportObs = exportObs,
+                ExportTemplateOverrides = CloneStringDictionary(_config.ExportTemplateOverrides),
+                ExportTemplateVersion = _exportTemplateVersion
             };
         }
 
@@ -7427,7 +9596,7 @@ internal sealed class V1StockTracker
         return false;
     }
 
-    private void ExportObsState(TrackerState state, string? stateJson)
+    private void ExportObsState(TrackerState state, string? stateJson, IReadOnlyDictionary<string, string> exportTemplateOverrides, int exportTemplateVersion)
     {
         if (!HasAnyTextExportEnabled(state))
         {
@@ -7446,21 +9615,27 @@ internal sealed class V1StockTracker
 
         string currentDir = Path.Combine(_obsDir, "current");
         Directory.CreateDirectory(currentDir);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), FormatObsValue("Current Section", state.CurrentSection ?? string.Empty));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), FormatObsValue("Current Streak", state.Streak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), FormatObsValue("Best FC Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), FormatObsValue("Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(currentDir, "current_ghosted_notes.txt"), FormatObsValue("Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(currentDir, "current_overstrums.txt"), FormatObsValue("Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(currentDir, "current_missed_notes.txt"), FormatObsValue("Current Missed Notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(currentDir, "lifetime_ghosted_notes.txt"), FormatObsValue("Song Lifetime Ghosted Notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "global_lifetime_ghosted_notes"), Path.Combine(currentDir, "global_lifetime_ghosted_notes.txt"), FormatObsValue("Global Lifetime Ghosted Notes", state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "fc_achieved"), Path.Combine(currentDir, "fc_achieved.txt"), FormatObsValue("FC Achieved", state.FcAchieved ? "True" : "False"));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), RenderExportTemplate("metric.current_section", CreateMetricTemplateContext(state, "Current Section", state.CurrentSection ?? string.Empty), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), RenderExportTemplate("metric.streak", CreateMetricTemplateContext(state, "Current Streak", state.Streak.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), RenderExportTemplate("metric.best_streak", CreateMetricTemplateContext(state, "Best FC Streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), RenderExportTemplate("metric.attempts", CreateMetricTemplateContext(state, "Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(currentDir, "current_ghosted_notes.txt"), RenderExportTemplate("metric.current_ghosted_notes", CreateMetricTemplateContext(state, "Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(currentDir, "current_overstrums.txt"), RenderExportTemplate("metric.current_overstrums", CreateMetricTemplateContext(state, "Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(currentDir, "current_missed_notes.txt"), RenderExportTemplate("metric.current_missed_notes", CreateMetricTemplateContext(state, "Current Missed Notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(currentDir, "lifetime_ghosted_notes.txt"), RenderExportTemplate("metric.lifetime_ghosted_notes", CreateMetricTemplateContext(state, "Song Lifetime Ghosted Notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "global_lifetime_ghosted_notes"), Path.Combine(currentDir, "global_lifetime_ghosted_notes.txt"), RenderExportTemplate("metric.global_lifetime_ghosted_notes", CreateMetricTemplateContext(state, "Global Lifetime Ghosted Notes", state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "fc_achieved"), Path.Combine(currentDir, "fc_achieved.txt"), RenderExportTemplate("metric.fc_achieved", CreateMetricTemplateContext(state, "FC Achieved", state.FcAchieved ? "True" : "False"), exportTemplateOverrides, exportTemplateVersion));
 
         bool exportTrackedSectionFiles = state.SectionStats.Any(candidate => candidate.Tracked);
         if (state.CurrentSectionStats != null && exportTrackedSectionFiles)
         {
-            WriteObsText(Path.Combine(currentDir, "current_section_summary.txt"), BuildSectionSummary(state.CurrentSectionStats));
+            WriteObsText(
+                Path.Combine(currentDir, "current_section_summary.txt"),
+                RenderExportTemplate(
+                    "section.current_summary",
+                    CreateSectionTemplateContext(state, state.CurrentSectionStats, state.CurrentSectionStats.Name, "Current Section Summary", string.Empty),
+                    exportTemplateOverrides,
+                    exportTemplateVersion));
         }
         else
         {
@@ -7474,15 +9649,15 @@ internal sealed class V1StockTracker
 
         string songDir = Path.Combine(_obsDir, "songs", SanitizeFileName(state.Song.SongKey));
         Directory.CreateDirectory(songDir);
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(songDir, "attempts.txt"), FormatObsValue("Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(songDir, "current_ghosted_notes.txt"), FormatObsValue("Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(songDir, "current_overstrums.txt"), FormatObsValue("Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(songDir, "current_missed_notes.txt"), FormatObsValue("Current Missed Notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(songDir, "lifetime_ghosted_notes.txt"), FormatObsValue("Song Lifetime Ghosted Notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(songDir, "attempts.txt"), RenderExportTemplate("metric.attempts", CreateMetricTemplateContext(state, "Total Attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(songDir, "current_ghosted_notes.txt"), RenderExportTemplate("metric.current_ghosted_notes", CreateMetricTemplateContext(state, "Current Ghosted Notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(songDir, "current_overstrums.txt"), RenderExportTemplate("metric.current_overstrums", CreateMetricTemplateContext(state, "Current Overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(songDir, "current_missed_notes.txt"), RenderExportTemplate("metric.current_missed_notes", CreateMetricTemplateContext(state, "Current Missed Notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(songDir, "lifetime_ghosted_notes.txt"), RenderExportTemplate("metric.lifetime_ghosted_notes", CreateMetricTemplateContext(state, "Song Lifetime Ghosted Notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
         string currentSectionExportName = state.CurrentSectionStats != null
             ? BuildSectionExportName(state.SectionStats, state.CurrentSectionStats)
             : state.CurrentSection ?? string.Empty;
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(songDir, "current_section.txt"), FormatObsValue("Current Section", currentSectionExportName));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(songDir, "current_section.txt"), RenderExportTemplate("metric.current_section", CreateMetricTemplateContext(state, "Current Section", currentSectionExportName), exportTemplateOverrides, exportTemplateVersion));
 
         string sectionsDir = Path.Combine(songDir, "sections");
         bool exportAnySectionFiles = exportTrackedSectionFiles;
@@ -7494,11 +9669,11 @@ internal sealed class V1StockTracker
                 string sectionExportName = BuildSectionExportName(state.SectionStats, section);
                 string sectionDir = Path.Combine(sectionsDir, SanitizeFileName(sectionExportName));
                 Directory.CreateDirectory(sectionDir);
-                WriteObsText(Path.Combine(sectionDir, "name.txt"), FormatObsValue("Section Name", sectionExportName));
-                WriteObsText(Path.Combine(sectionDir, "summary.txt"), BuildSectionSummary(section));
-                WriteObsText(Path.Combine(sectionDir, "attempts.txt"), section.Attempts.ToString(CultureInfo.InvariantCulture));
-                WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), section.RunsPast.ToString(CultureInfo.InvariantCulture));
-                WriteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), section.KilledTheRun.ToString(CultureInfo.InvariantCulture));
+                WriteObsText(Path.Combine(sectionDir, "name.txt"), RenderExportTemplate("section.name", CreateSectionTemplateContext(state, section, sectionExportName, "Section Name", sectionExportName), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "summary.txt"), RenderExportTemplate("section.summary", CreateSectionTemplateContext(state, section, sectionExportName, "Section Summary", string.Empty), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "attempts.txt"), RenderExportTemplate("section.attempts", CreateSectionTemplateContext(state, section, sectionExportName, "Attempts", section.Attempts.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), RenderExportTemplate("section.fcs_past", CreateSectionTemplateContext(state, section, sectionExportName, "FCs Past", section.RunsPast.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), RenderExportTemplate("section.killed_the_run", CreateSectionTemplateContext(state, section, sectionExportName, "Killed the Run", section.KilledTheRun.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
                 DeleteObsText(Path.Combine(sectionDir, "tracked.txt"));
                 DeleteObsText(Path.Combine(sectionDir, "start_time.txt"));
             }
@@ -7516,17 +9691,17 @@ internal sealed class V1StockTracker
             {
                 string runDir = Path.Combine(runsDir, BuildCompletedRunDirectoryName(run));
                 Directory.CreateDirectory(runDir);
-                WriteObsText(Path.Combine(runDir, "completed_at_utc.txt"), FormatObsValue("Completed At UTC", run.CompletedAtUtc ?? string.Empty));
-                WriteObsText(Path.Combine(runDir, "percent.txt"), FormatObsValue("Percent", run.Percent.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "score.txt"), FormatObsValue("Score", run.Score.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "best_streak.txt"), FormatObsValue("Best Streak", run.BestStreak.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "first_miss_streak.txt"), FormatObsValue("First Miss Streak", run.FirstMissStreak.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "ghosted_notes.txt"), FormatObsValue("Ghosted Notes", run.GhostedNotes.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "overstrums.txt"), FormatObsValue("Overstrums", run.Overstrums.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "missed_notes.txt"), FormatObsValue("Missed Notes", run.MissedNotes.ToString(CultureInfo.InvariantCulture)));
-                WriteObsText(Path.Combine(runDir, "fc_achieved.txt"), FormatObsValue("FC Achieved", run.FcAchieved ? "True" : "False"));
-                WriteObsText(Path.Combine(runDir, "final_section.txt"), FormatObsValue("Final Section", run.FinalSection ?? string.Empty));
-                WriteObsText(Path.Combine(runDir, "summary.txt"), FormatObsValue("Run Summary", BuildCompletedRunSummary(run)));
+                WriteObsText(Path.Combine(runDir, "completed_at_utc.txt"), RenderExportTemplate("run.completed_at_utc", CreateRunTemplateContext(state, run, "Completed At UTC", run.CompletedAtUtc ?? string.Empty), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "percent.txt"), RenderExportTemplate("run.percent", CreateRunTemplateContext(state, run, "Percent", run.Percent.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "score.txt"), RenderExportTemplate("run.score", CreateRunTemplateContext(state, run, "Score", run.Score.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "best_streak.txt"), RenderExportTemplate("run.best_streak", CreateRunTemplateContext(state, run, "Best Streak", run.BestStreak.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "first_miss_streak.txt"), RenderExportTemplate("run.first_miss_streak", CreateRunTemplateContext(state, run, "First Miss Streak", run.FirstMissStreak.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "ghosted_notes.txt"), RenderExportTemplate("run.ghosted_notes", CreateRunTemplateContext(state, run, "Ghosted Notes", run.GhostedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "overstrums.txt"), RenderExportTemplate("run.overstrums", CreateRunTemplateContext(state, run, "Overstrums", run.Overstrums.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "missed_notes.txt"), RenderExportTemplate("run.missed_notes", CreateRunTemplateContext(state, run, "Missed Notes", run.MissedNotes.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "fc_achieved.txt"), RenderExportTemplate("run.fc_achieved", CreateRunTemplateContext(state, run, "FC Achieved", run.FcAchieved ? "True" : "False"), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "final_section.txt"), RenderExportTemplate("run.final_section", CreateRunTemplateContext(state, run, "Final Section", run.FinalSection ?? string.Empty), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(runDir, "summary.txt"), RenderExportTemplate("run.summary", CreateRunTemplateContext(state, run, "Run Summary", string.Empty), exportTemplateOverrides, exportTemplateVersion));
             }
         }
         else
@@ -7581,7 +9756,7 @@ internal sealed class V1StockTracker
 
                     if (workItem.ExportObs)
                     {
-                        ExportObsState(workItem.State, stateJson);
+                        ExportObsState(workItem.State, stateJson, workItem.ExportTemplateOverrides, workItem.ExportTemplateVersion);
                     }
                 }
             }
@@ -7678,7 +9853,23 @@ internal sealed class V1StockTracker
         TrackerConfig next = new TrackerConfig
         {
             OverlayEditor = CloneOverlayEditorConfig(_config.OverlayEditor ?? new OverlayEditorConfig()),
-            DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle)
+            ExportTemplateEditor = CloneExportTemplateEditorConfig(_config.ExportTemplateEditor ?? new ExportTemplateEditorConfig()),
+            DesktopOverlayStyle = CloneDesktopOverlayStyle(_mergedDesktopOverlayStyle),
+            ExportTemplateOverrides = CloneStringDictionary(_config.ExportTemplateOverrides),
+            AnimatedMenuTintR = _config.AnimatedMenuTintR,
+            AnimatedMenuTintG = _config.AnimatedMenuTintG,
+            AnimatedMenuTintB = _config.AnimatedMenuTintB,
+            AnimatedMenuTintA = _config.AnimatedMenuTintA,
+            AnimatedMenuWispR = _config.AnimatedMenuWispR,
+            AnimatedMenuWispG = _config.AnimatedMenuWispG,
+            AnimatedMenuWispB = _config.AnimatedMenuWispB,
+            AnimatedMenuWispA = _config.AnimatedMenuWispA,
+            AnimatedMenuWispSize = _config.AnimatedMenuWispSize,
+            AnimatedMenuTintBackgroundOverlayStrength = _config.AnimatedMenuTintBackgroundOverlayStrength,
+            AnimatedMenuTintCanvasOverlayStrength = _config.AnimatedMenuTintCanvasOverlayStrength,
+            AnimatedMenuTintRawImageStrength = _config.AnimatedMenuTintRawImageStrength,
+            AnimatedMenuTintMaterialStrength = _config.AnimatedMenuTintMaterialStrength,
+            AnimatedMenuTintOnGuiOverlayStrength = _config.AnimatedMenuTintOnGuiOverlayStrength
         };
         foreach (KeyValuePair<string, bool> pair in EnsureDefaultEnabledTextExports())
         {
@@ -7762,6 +9953,18 @@ internal sealed class V1StockTracker
         };
     }
 
+    private static ExportTemplateEditorConfig CloneExportTemplateEditorConfig(ExportTemplateEditorConfig config)
+    {
+        return new ExportTemplateEditorConfig
+        {
+            X = config.X,
+            Y = config.Y,
+            Width = config.Width,
+            Height = config.Height,
+            ResizeHandleHidden = config.ResizeHandleHidden
+        };
+    }
+
     private static OverlayWidgetConfig CloneOverlayWidgetConfig(OverlayWidgetConfig config)
     {
         return new OverlayWidgetConfig
@@ -7809,7 +10012,23 @@ internal sealed class V1StockTracker
         TrackerConfig clone = new TrackerConfig
         {
             OverlayEditor = CloneOverlayEditorConfig(config.OverlayEditor ?? new OverlayEditorConfig()),
-            DesktopOverlayStyle = CloneDesktopOverlayStyle(config.DesktopOverlayStyle ?? new DesktopOverlayStyleConfig())
+            ExportTemplateEditor = CloneExportTemplateEditorConfig(config.ExportTemplateEditor ?? new ExportTemplateEditorConfig()),
+            DesktopOverlayStyle = CloneDesktopOverlayStyle(config.DesktopOverlayStyle ?? new DesktopOverlayStyleConfig()),
+            ExportTemplateOverrides = CloneStringDictionary(config.ExportTemplateOverrides),
+            AnimatedMenuTintR = config.AnimatedMenuTintR,
+            AnimatedMenuTintG = config.AnimatedMenuTintG,
+            AnimatedMenuTintB = config.AnimatedMenuTintB,
+            AnimatedMenuTintA = config.AnimatedMenuTintA,
+            AnimatedMenuWispR = config.AnimatedMenuWispR,
+            AnimatedMenuWispG = config.AnimatedMenuWispG,
+            AnimatedMenuWispB = config.AnimatedMenuWispB,
+            AnimatedMenuWispA = config.AnimatedMenuWispA,
+            AnimatedMenuWispSize = config.AnimatedMenuWispSize,
+            AnimatedMenuTintBackgroundOverlayStrength = config.AnimatedMenuTintBackgroundOverlayStrength,
+            AnimatedMenuTintCanvasOverlayStrength = config.AnimatedMenuTintCanvasOverlayStrength,
+            AnimatedMenuTintRawImageStrength = config.AnimatedMenuTintRawImageStrength,
+            AnimatedMenuTintMaterialStrength = config.AnimatedMenuTintMaterialStrength,
+            AnimatedMenuTintOnGuiOverlayStrength = config.AnimatedMenuTintOnGuiOverlayStrength
         };
 
         foreach (KeyValuePair<string, SongConfig> pair in config.Songs)
@@ -7820,6 +10039,22 @@ internal sealed class V1StockTracker
         foreach (KeyValuePair<string, bool> pair in config.DefaultEnabledTextExports)
         {
             clone.DefaultEnabledTextExports[pair.Key] = pair.Value;
+        }
+
+        return clone;
+    }
+
+    private static Dictionary<string, string> CloneStringDictionary(Dictionary<string, string>? source)
+    {
+        Dictionary<string, string> clone = new(StringComparer.Ordinal);
+        if (source == null)
+        {
+            return clone;
+        }
+
+        foreach (KeyValuePair<string, string> pair in source)
+        {
+            clone[pair.Key] = pair.Value ?? string.Empty;
         }
 
         return clone;
@@ -8013,6 +10248,156 @@ internal sealed class V1StockTracker
         return string.IsNullOrWhiteSpace(label)
             ? (value ?? string.Empty)
             : label + ": " + (value ?? string.Empty);
+    }
+
+    private string RenderExportTemplate(string templateId, ExportTemplateRenderContext context)
+    {
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForMain(templateId), context);
+    }
+
+    private string RenderExportTemplate(string templateId, ExportTemplateRenderContext context, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
+    {
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorker(templateId, templateOverrides, templateVersion), context);
+    }
+
+    private CompiledExportTemplate GetCompiledExportTemplateForMain(string templateId)
+    {
+        if (_compiledExportTemplatesVersion != _exportTemplateVersion)
+        {
+            _compiledExportTemplates.Clear();
+            _compiledExportTemplatesVersion = _exportTemplateVersion;
+        }
+
+        if (_compiledExportTemplates.TryGetValue(templateId, out CompiledExportTemplate? compiledTemplate))
+        {
+            return compiledTemplate;
+        }
+
+        ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
+            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
+
+        string source = GetEffectiveExportTemplateSource(definition);
+        CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source);
+        _compiledExportTemplates[templateId] = compiled;
+        return compiled;
+    }
+
+    private CompiledExportTemplate GetCompiledExportTemplateForWorker(string templateId, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
+    {
+        if (_workerCompiledExportTemplatesVersion != templateVersion)
+        {
+            _workerCompiledExportTemplates.Clear();
+            _workerCompiledExportTemplatesVersion = templateVersion;
+        }
+
+        if (_workerCompiledExportTemplates.TryGetValue(templateId, out CompiledExportTemplate? compiledTemplate))
+        {
+            return compiledTemplate;
+        }
+
+        ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
+            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
+
+        string source = templateOverrides.TryGetValue(definition.TemplateId, out string? templateOverride)
+            ? (templateOverride ?? string.Empty)
+            : definition.DefaultTemplate;
+        CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source);
+        _workerCompiledExportTemplates[templateId] = compiled;
+        return compiled;
+    }
+
+    private CompiledExportTemplate CompileExportTemplateWithFallback(ExportTemplateDefinition definition, string source)
+    {
+        if (!ExportTemplateEngine.TryCompile(definition, source, out CompiledExportTemplate? compiled, out string? errorMessage, out int errorLineNumber))
+        {
+            LogInvalidExportTemplate(definition, source, errorMessage, errorLineNumber);
+            if (!ExportTemplateEngine.TryCompile(definition, definition.DefaultTemplate, out compiled, out errorMessage, out errorLineNumber) || compiled == null)
+            {
+                throw new InvalidOperationException("Failed to compile default export template: " + definition.TemplateId);
+            }
+        }
+
+        return compiled!;
+    }
+
+    private string GetEffectiveExportTemplateSource(ExportTemplateDefinition definition)
+    {
+        Dictionary<string, string> overrides = EnsureExportTemplateOverrides();
+        return overrides.TryGetValue(definition.TemplateId, out string? templateOverride)
+            ? (templateOverride ?? string.Empty)
+            : definition.DefaultTemplate;
+    }
+
+    private void LogInvalidExportTemplate(ExportTemplateDefinition definition, string source, string? errorMessage, int errorLineNumber)
+    {
+        lock (_exportTemplateLogSync)
+        {
+            if (_loggedInvalidTemplateSources.TryGetValue(definition.TemplateId, out string? previousSource) &&
+                string.Equals(previousSource, source, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _loggedInvalidTemplateSources[definition.TemplateId] = source;
+        }
+        StockTrackerLog.Write($"InvalidExportTemplate | id={definition.TemplateId} | line={errorLineNumber.ToString(CultureInfo.InvariantCulture)} | error={errorMessage ?? "Unknown error"}");
+    }
+
+    private ExportTemplateRenderContext CreateMetricTemplateContext(TrackerState state, string label, string value)
+    {
+        ExportTemplateRenderContext context = CreateCommonExportTemplateContext(state);
+        context.Set("label", label);
+        context.Set("value", value);
+        return context;
+    }
+
+    private ExportTemplateRenderContext CreateSectionTemplateContext(TrackerState state, SectionStatsState section, string sectionExportName, string label, string value)
+    {
+        ExportTemplateRenderContext context = CreateCommonExportTemplateContext(state);
+        context.Set("label", label);
+        context.Set("value", value);
+        context.Set("section_name", sectionExportName);
+        context.Set("attempts", section.Attempts);
+        context.Set("fcs_past", section.RunsPast);
+        context.Set("killed_the_run", section.KilledTheRun);
+        context.SetBool("tracked", section.Tracked);
+        context.SetBool("has_best_miss_count", section.BestMissCount.HasValue);
+        context.Set("best_miss_count", section.BestMissCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+        return context;
+    }
+
+    private ExportTemplateRenderContext CreateRunTemplateContext(TrackerState state, CompletedRunRecord run, string label, string value)
+    {
+        ExportTemplateRenderContext context = CreateCommonExportTemplateContext(state);
+        context.Set("label", label);
+        context.Set("value", value);
+        context.Set("run_index", run.Index);
+        context.Set("completed_at_utc", run.CompletedAtUtc ?? string.Empty);
+        context.Set("percent", run.Percent);
+        context.Set("score", run.Score);
+        context.Set("best_streak", run.BestStreak);
+        context.Set("first_miss_streak", run.FirstMissStreak);
+        context.Set("ghosted_notes", run.GhostedNotes);
+        context.Set("overstrums", run.Overstrums);
+        context.Set("missed_notes", run.MissedNotes);
+        context.SetBool("fc_achieved", run.FcAchieved);
+        context.Set("fc_yes_no", run.FcAchieved ? "Yes" : "No");
+        context.Set("final_section", run.FinalSection ?? string.Empty);
+        context.SetBool("has_final_section", !string.IsNullOrWhiteSpace(run.FinalSection));
+        return context;
+    }
+
+    private ExportTemplateRenderContext CreateCommonExportTemplateContext(TrackerState state)
+    {
+        ExportTemplateRenderContext context = new();
+        SongDescriptor? song = state.Song;
+        context.Set("song_key", song?.SongKey ?? string.Empty);
+        context.Set("title", song?.Title ?? string.Empty);
+        context.Set("artist", song?.Artist ?? string.Empty);
+        context.Set("charter", song?.Charter ?? string.Empty);
+        context.Set("difficulty_name", song?.DifficultyName ?? string.Empty);
+        context.Set("song_speed_label", song?.SongSpeedLabel ?? string.Empty);
+        return context;
     }
 
     private void DeleteObsText(string path)
@@ -8703,7 +11088,23 @@ public sealed class TrackerConfig
     public Dictionary<string, SongConfig> Songs { get; set; } = new();
     public Dictionary<string, bool> DefaultEnabledTextExports { get; set; } = new();
     public OverlayEditorConfig OverlayEditor { get; set; } = new();
+    public ExportTemplateEditorConfig ExportTemplateEditor { get; set; } = new();
     public DesktopOverlayStyleConfig DesktopOverlayStyle { get; set; } = new();
+    public Dictionary<string, string> ExportTemplateOverrides { get; set; } = new();
+    public float AnimatedMenuTintR { get; set; } = 0.6470588f;
+    public float AnimatedMenuTintG { get; set; } = 0.2784314f;
+    public float AnimatedMenuTintB { get; set; } = 0.9882353f;
+    public float AnimatedMenuTintA { get; set; }
+    public float AnimatedMenuWispR { get; set; } = 1f;
+    public float AnimatedMenuWispG { get; set; } = 1f;
+    public float AnimatedMenuWispB { get; set; } = 1f;
+    public float AnimatedMenuWispA { get; set; } = 0.58f;
+    public float AnimatedMenuWispSize { get; set; } = 0.68f;
+    public float AnimatedMenuTintBackgroundOverlayStrength { get; set; } = 0.35f;
+    public float AnimatedMenuTintCanvasOverlayStrength { get; set; }
+    public float AnimatedMenuTintRawImageStrength { get; set; }
+    public float AnimatedMenuTintMaterialStrength { get; set; }
+    public float AnimatedMenuTintOnGuiOverlayStrength { get; set; }
 }
 
 public sealed class SongConfig
@@ -8722,6 +11123,15 @@ public sealed class OverlayEditorConfig
     public float Width { get; set; } = 765f;
     public float Height { get; set; } = 567f;
     public float BackgroundA { get; set; } = 0.82f;
+    public bool ResizeHandleHidden { get; set; }
+}
+
+public sealed class ExportTemplateEditorConfig
+{
+    public float X { get; set; } = 540f;
+    public float Y { get; set; } = 150f;
+    public float Width { get; set; } = 1080f;
+    public float Height { get; set; } = 700f;
     public bool ResizeHandleHidden { get; set; }
 }
 
@@ -8999,6 +11409,8 @@ internal sealed class ExportWorkItem
     public TrackerState State { get; set; } = new();
     public bool ExportStateJson { get; set; }
     public bool ExportObs { get; set; }
+    public Dictionary<string, string> ExportTemplateOverrides { get; set; } = new(StringComparer.Ordinal);
+    public int ExportTemplateVersion { get; set; }
 }
 
 internal sealed class PersistenceWriteItem

@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $outDir = Join-Path $root "dist-v1-stock"
 $stockSrc = Join-Path $root "src\V1StockTracker.cs"
+$exportTemplatesSrc = Join-Path $root "src\ExportTemplates.cs"
 $patcherSrc = Join-Path $root "src\V1StockAssemblyPatcher.cs"
 $desktopOverlaySrc = Join-Path $root "src\DesktopOverlayApp.cs"
 $runtimeCheckerSrc = Join-Path $root "src\V1RuntimeCompatibilityChecker.cs"
@@ -48,6 +49,7 @@ $gameDir = Resolve-GameDir
 $managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
 
 if (-not (Test-Path $stockSrc)) { throw "Missing source file: $stockSrc" }
+if (-not (Test-Path $exportTemplatesSrc)) { throw "Missing source file: $exportTemplatesSrc" }
 if (-not (Test-Path $patcherSrc)) { throw "Missing source file: $patcherSrc" }
 if (-not (Test-Path $desktopOverlaySrc)) { throw "Missing source file: $desktopOverlaySrc" }
 if (-not (Test-Path $runtimeCheckerSrc)) { throw "Missing source file: $runtimeCheckerSrc" }
@@ -70,13 +72,15 @@ $stockRefs = @(
     (Join-Path $managedDir "UnityEngine.IMGUIModule.dll"),
     (Join-Path $managedDir "UnityEngine.InputLegacyModule.dll"),
     (Join-Path $managedDir "UnityEngine.TextRenderingModule.dll"),
+    (Join-Path $managedDir "UnityEngine.UI.dll"),
+    (Join-Path $managedDir "UnityEngine.UIModule.dll"),
     (Join-Path $managedDir "Newtonsoft.Json.dll"),
     "System.dll",
     "System.Core.dll"
 )
 
 $stockReferenceArgs = $stockRefs | ForEach-Object { "/reference:`"$_`"" }
-& $csc /nologo /target:library /langversion:latest /optimize+ /warnaserror+ /out:$stockDll $stockReferenceArgs $stockSrc
+& $csc /nologo /target:library /langversion:latest /optimize+ /warnaserror+ /out:$stockDll $stockReferenceArgs $stockSrc $exportTemplatesSrc
 if ($LASTEXITCODE -ne 0) { throw "Failed to build stock helper." }
 
 & $csc /nologo /target:exe /langversion:latest /optimize+ /warnaserror+ /out:$patcherExe /reference:System.dll /reference:System.Core.dll /reference:$cecilDll /reference:$cecilRocksDll $patcherSrc

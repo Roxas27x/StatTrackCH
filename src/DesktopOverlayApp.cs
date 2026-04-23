@@ -911,7 +911,21 @@ internal sealed class DesktopOverlayForm : Form
 
 internal static class NoteSplitRenderer
 {
-    public static void DrawPanel(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
+    private readonly struct NoteSplitListLayout
+    {
+        public NoteSplitListLayout(RectangleF listRect, float rowHeight, List<OverlayNoteSplitSectionState> rows)
+        {
+            ListRect = listRect;
+            RowHeight = rowHeight;
+            Rows = rows;
+        }
+
+        public RectangleF ListRect { get; }
+        public float RowHeight { get; }
+        public List<OverlayNoteSplitSectionState> Rows { get; }
+    }
+
+    public static void DrawPanel(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style, float listScrollOffset = 0f)
     {
         const float padding = 10f;
         const float headerGap = 4f;
@@ -985,7 +999,6 @@ internal static class NoteSplitRenderer
             RectangleF attemptsRect = new RectangleF(attemptsX, headerTop, attemptsColumnWidth, attemptsHeight + 2f);
             RectangleF attemptsLabelRect = new RectangleF(attemptsX, attemptsRect.Bottom + headerGap, attemptsColumnWidth, attemptsLabelHeight + 2f);
 
-            RectangleF listRect = new RectangleF(rect.X + 1f, rect.Y + headerHeight, rect.Width - 2f, Math.Max(0f, rect.Height - headerHeight - footerHeight));
             float footerTop = rect.Bottom - footerHeight + padding;
             RectangleF totalRect = new RectangleF(rect.X + padding, footerTop, rect.Width - (padding * 2f), totalRectHeight);
             RectangleF personalBestRect = new RectangleF(rect.X + padding, totalRect.Bottom + footerGap, rect.Width - (padding * 2f), personalBestRectHeight);
@@ -1000,9 +1013,9 @@ internal static class NoteSplitRenderer
             graphics.DrawString(attemptsText, attemptsFont, whiteBrush, attemptsRect, headerRightFormat);
             graphics.DrawString("Attempts", smallLabelFont, mutedBrush, attemptsLabelRect, headerRightFormat);
 
-            List<OverlayNoteSplitSectionState> rows = state.NoteSplitSections
-                .OrderBy(section => section.Order)
-                .ToList();
+            NoteSplitListLayout listLayout = BuildListLayout(graphics, rect, state, style);
+            List<OverlayNoteSplitSectionState> rows = listLayout.Rows;
+            RectangleF listRect = listLayout.ListRect;
             if (rows.Count == 0)
             {
                 using var emptyFont = CreateFont(style, 14f, FontStyle.Regular);
@@ -1012,23 +1025,24 @@ internal static class NoteSplitRenderer
             }
             else
             {
-                float targetRowHeight = Math.Max(11f, listRect.Height / Math.Max(1, rows.Count));
+                float rowHeight = listLayout.RowHeight;
+                float targetRowHeight = Math.Max(11f, rowHeight);
                 float nameFontSize = Clamp(targetRowHeight * 0.58f, 9f, 15f);
                 float valueFontSize = Clamp(targetRowHeight * 0.62f, 10f, 16f);
                 using var sampleNameFont = CreateFont(style, nameFontSize, FontStyle.Regular);
                 using var sampleValueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
                 float measuredTextHeight = Math.Max(sampleNameFont.GetHeight(graphics), sampleValueFont.GetHeight(graphics));
                 float rowPaddingY = Math.Max(1f, measuredTextHeight * 0.18f);
-                float rowHeight = Math.Max(targetRowHeight, measuredTextHeight + (rowPaddingY * 2f));
                 float previousColumnWidth = 56f;
                 float currentColumnWidth = 56f;
                 float bestColumnWidth = 56f;
+                float clampedScrollOffset = Clamp(listScrollOffset, 0f, Math.Max(0f, (rowHeight * rows.Count) - listRect.Height));
                 GraphicsState clipState = graphics.Save();
                 graphics.SetClip(listRect);
                 for (int i = 0; i < rows.Count; i++)
                 {
                     OverlayNoteSplitSectionState row = rows[i];
-                    RectangleF rowRect = new RectangleF(listRect.X, listRect.Y + (rowHeight * i), listRect.Width, rowHeight);
+                    RectangleF rowRect = new RectangleF(listRect.X, listRect.Y + (rowHeight * i) - clampedScrollOffset, listRect.Width, rowHeight);
                     Color rowBackground = row.IsCurrent
                         ? Color.FromArgb(255, 42, 91, 180)
                         : (i % 2 == 0 ? Color.FromArgb(255, 18, 18, 18) : Color.FromArgb(255, 12, 12, 12));
@@ -1081,6 +1095,127 @@ internal static class NoteSplitRenderer
             graphics.DrawString(previousLabel, previousFont, footerLabelBrush, previousLabelRect, footerLeftFormat);
             graphics.DrawString(previousValue, previousValueFont, previousValueBrush, previousValueRect, footerRightFormat);
         }
+    }
+
+    public static float CalculateAutoScrollOffset(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style, float currentOffset)
+    {
+        NoteSplitListLayout layout = BuildListLayout(graphics, rect, state, style);
+        if (layout.Rows.Count == 0 || layout.RowHeight <= 0.01f || layout.ListRect.Height <= 0.01f)
+        {
+            return 0f;
+        }
+
+        float maxOffset = Math.Max(0f, (layout.RowHeight * layout.Rows.Count) - layout.ListRect.Height);
+        float clampedOffset = Clamp(currentOffset, 0f, maxOffset);
+        int currentIndex = layout.Rows.FindIndex(row => row.IsCurrent);
+        if (currentIndex < 0)
+        {
+            return clampedOffset;
+        }
+
+        float rowTop = currentIndex * layout.RowHeight;
+        float rowBottom = rowTop + layout.RowHeight;
+        float topMargin = layout.RowHeight;
+        float bottomMargin = layout.RowHeight * 2f;
+        float visibleTop = clampedOffset;
+        float visibleBottom = clampedOffset + layout.ListRect.Height;
+        if (rowTop < visibleTop + topMargin)
+        {
+            clampedOffset = rowTop - topMargin;
+        }
+        else if (rowBottom > visibleBottom - bottomMargin)
+        {
+            clampedOffset = rowBottom - layout.ListRect.Height + bottomMargin;
+        }
+
+        return Clamp(clampedOffset, 0f, maxOffset);
+    }
+
+    public static float ClampScrollOffset(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style, float currentOffset)
+    {
+        NoteSplitListLayout layout = BuildListLayout(graphics, rect, state, style);
+        if (layout.Rows.Count == 0 || layout.RowHeight <= 0.01f || layout.ListRect.Height <= 0.01f)
+        {
+            return 0f;
+        }
+
+        float maxOffset = Math.Max(0f, (layout.RowHeight * layout.Rows.Count) - layout.ListRect.Height);
+        return Clamp(currentOffset, 0f, maxOffset);
+    }
+
+    public static float GetSuggestedScrollStep(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
+    {
+        NoteSplitListLayout layout = BuildListLayout(graphics, rect, state, style);
+        if (layout.RowHeight <= 0.01f)
+        {
+            return 48f;
+        }
+
+        return Math.Max(24f, layout.RowHeight * 3f);
+    }
+
+    private static NoteSplitListLayout BuildListLayout(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
+    {
+        const float padding = 10f;
+        const float headerGap = 4f;
+        const float footerGap = 4f;
+        const float minimumHeaderHeight = 58f;
+        const float minimumFooterHeight = 112f;
+
+        string title = GetSongTitle(state);
+        string artist = state.Song?.Artist ?? string.Empty;
+        string attemptsText = state.Attempts.ToString(CultureInfo.InvariantCulture);
+        using var titleFont = CreateFont(style, Clamp(rect.Width * 0.065f, 12f, 20f), FontStyle.Bold);
+        using var subtitleFont = CreateFont(style, 12f, FontStyle.Regular);
+        using var attemptsFont = CreateFont(style, 18f, FontStyle.Bold);
+        using var smallLabelFont = CreateFont(style, 10f, FontStyle.Regular);
+        using var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold);
+        using var personalBestFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var personalBestValueFont = CreateFont(style, 12f, FontStyle.Bold);
+        using var previousFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var previousValueFont = CreateFont(style, 12f, FontStyle.Bold);
+
+        float titleHeight = Math.Max(1f, titleFont.GetHeight(graphics));
+        float subtitleHeight = Math.Max(1f, subtitleFont.GetHeight(graphics));
+        float attemptsHeight = Math.Max(1f, attemptsFont.GetHeight(graphics));
+        float attemptsLabelHeight = Math.Max(1f, smallLabelFont.GetHeight(graphics));
+        float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(artist) ? headerGap + subtitleHeight : 0f);
+        float attemptsBlockHeight = attemptsHeight + headerGap + attemptsLabelHeight;
+        float attemptsColumnWidth = Math.Max(
+            60f,
+            Math.Max(
+                graphics.MeasureString(attemptsText, attemptsFont).Width,
+                graphics.MeasureString("Attempts", smallLabelFont).Width) + 10f);
+        float headerHeight = Math.Max(minimumHeaderHeight, padding + Math.Max(headerTitleBlockHeight, attemptsBlockHeight) + padding);
+
+        float totalHeight = Math.Max(1f, totalFont.GetHeight(graphics));
+        float personalBestHeight = Math.Max(personalBestFont.GetHeight(graphics), personalBestValueFont.GetHeight(graphics));
+        float previousHeight = Math.Max(previousFont.GetHeight(graphics), previousValueFont.GetHeight(graphics));
+        float totalRectHeight = totalHeight + 10f;
+        float personalBestRectHeight = personalBestHeight + 2f;
+        float previousRectHeight = previousHeight + 2f;
+        float footerHeight = Math.Max(
+            minimumFooterHeight,
+            padding + totalRectHeight + footerGap + personalBestRectHeight + footerGap + previousRectHeight + padding);
+
+        RectangleF listRect = new RectangleF(rect.X + 1f, rect.Y + headerHeight, rect.Width - 2f, Math.Max(0f, rect.Height - headerHeight - footerHeight));
+        List<OverlayNoteSplitSectionState> rows = state.NoteSplitSections
+            .OrderBy(section => section.Order)
+            .ToList();
+        if (rows.Count == 0 || listRect.Height <= 0.01f)
+        {
+            return new NoteSplitListLayout(listRect, 0f, rows);
+        }
+
+        float targetRowHeight = Math.Max(11f, listRect.Height / Math.Max(1, rows.Count));
+        float nameFontSize = Clamp(targetRowHeight * 0.58f, 9f, 15f);
+        float valueFontSize = Clamp(targetRowHeight * 0.62f, 10f, 16f);
+        using var sampleNameFont = CreateFont(style, nameFontSize, FontStyle.Regular);
+        using var sampleValueFont = CreateFont(style, valueFontSize, FontStyle.Bold);
+        float measuredTextHeight = Math.Max(sampleNameFont.GetHeight(graphics), sampleValueFont.GetHeight(graphics));
+        float rowPaddingY = Math.Max(1f, measuredTextHeight * 0.18f);
+        float rowHeight = Math.Max(targetRowHeight, measuredTextHeight + (rowPaddingY * 2f));
+        return new NoteSplitListLayout(listRect, rowHeight, rows);
     }
 
     public static float Clamp(float value, float min, float max)
@@ -1241,6 +1376,10 @@ internal sealed class NoteSplitWindowForm : Form
     private Point _dragWindowOrigin;
     private Point _resizeCursorOrigin;
     private Size _resizeWindowOrigin;
+    private float _listScrollOffset;
+    private string _listScrollSongKey = string.Empty;
+    private string _listScrollCurrentSectionKey = string.Empty;
+    private bool _listScrollManualOverride;
 
     public NoteSplitWindowForm(DesktopOverlayStyle initialStyle, Action<DesktopOverlayStyle> saveStyle, Action<string> log, Action<bool> setDialogActive)
     {
@@ -1271,6 +1410,7 @@ internal sealed class NoteSplitWindowForm : Form
         MouseDown += HandleMouseDown;
         MouseMove += HandleMouseMove;
         MouseUp += HandleMouseUp;
+        MouseWheel += HandleMouseWheel;
     }
 
     protected override bool ShowWithoutActivation => false;
@@ -1280,11 +1420,34 @@ internal sealed class NoteSplitWindowForm : Form
         _state = state ?? new OverlayTrackerState();
         _style = CloneStyle(style);
         _gameClientBounds = gameClientBounds;
+        string songKey = _state.Song?.SongKey ?? string.Empty;
+        if (!string.Equals(_listScrollSongKey, songKey, StringComparison.Ordinal))
+        {
+            _listScrollSongKey = songKey;
+            _listScrollOffset = 0f;
+            _listScrollCurrentSectionKey = ResolveCurrentNoteSplitSectionKey(_state);
+            _listScrollManualOverride = false;
+            invalidate = true;
+        }
+        else
+        {
+            string currentSectionKey = ResolveCurrentNoteSplitSectionKey(_state);
+            if (!string.Equals(_listScrollCurrentSectionKey, currentSectionKey, StringComparison.Ordinal))
+            {
+                _listScrollCurrentSectionKey = currentSectionKey;
+                _listScrollManualOverride = false;
+                invalidate = true;
+            }
+        }
+
         TopMost = !_settingsDialogOpen && _style.NoteSplitTopMost;
         ApplyConfiguredBounds();
 
         if (!visible)
         {
+            _listScrollOffset = 0f;
+            _listScrollCurrentSectionKey = string.Empty;
+            _listScrollManualOverride = false;
             if (Visible)
             {
                 Hide();
@@ -1314,7 +1477,15 @@ internal sealed class NoteSplitWindowForm : Form
         e.Graphics.CompositingQuality = CompositingQuality.HighSpeed;
         e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
         e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        NoteSplitRenderer.DrawPanel(e.Graphics, ClientRectangle, _state, _style);
+        if (_listScrollManualOverride)
+        {
+            _listScrollOffset = NoteSplitRenderer.ClampScrollOffset(e.Graphics, ClientRectangle, _state, _style, _listScrollOffset);
+        }
+        else
+        {
+            _listScrollOffset = NoteSplitRenderer.CalculateAutoScrollOffset(e.Graphics, ClientRectangle, _state, _style, _listScrollOffset);
+        }
+        NoteSplitRenderer.DrawPanel(e.Graphics, ClientRectangle, _state, _style, _listScrollOffset);
         DrawResizeGrip(e.Graphics);
     }
 
@@ -1459,6 +1630,46 @@ internal sealed class NoteSplitWindowForm : Form
         SaveStyleFromCurrentBounds();
     }
 
+    private void HandleMouseWheel(object? sender, MouseEventArgs e)
+    {
+        if (_dragging || _resizing || _settingsDialogOpen || !Visible)
+        {
+            return;
+        }
+
+        try
+        {
+            using Graphics graphics = CreateGraphics();
+            float baseOffset = _listScrollManualOverride
+                ? _listScrollOffset
+                : NoteSplitRenderer.CalculateAutoScrollOffset(graphics, ClientRectangle, _state, _style, _listScrollOffset);
+            float step = NoteSplitRenderer.GetSuggestedScrollStep(graphics, ClientRectangle, _state, _style);
+            float wheelSteps = e.Delta / 120f;
+            if (Math.Abs(wheelSteps) <= 0.001f)
+            {
+                return;
+            }
+
+            float updatedOffset = NoteSplitRenderer.ClampScrollOffset(
+                graphics,
+                ClientRectangle,
+                _state,
+                _style,
+                baseOffset - (wheelSteps * step));
+            if (Math.Abs(updatedOffset - baseOffset) <= 0.01f)
+            {
+                return;
+            }
+
+            _listScrollOffset = updatedOffset;
+            _listScrollManualOverride = true;
+            Invalidate();
+        }
+        catch
+        {
+        }
+    }
+
     private void ApplyConfiguredBounds()
     {
         if (_dragging || _resizing)
@@ -1549,6 +1760,18 @@ internal sealed class NoteSplitWindowForm : Form
         catch
         {
         }
+    }
+
+    private static string ResolveCurrentNoteSplitSectionKey(OverlayTrackerState state)
+    {
+        OverlayNoteSplitSectionState? current = state.NoteSplitSections.FirstOrDefault(row => row.IsCurrent);
+        string? currentKey = current?.Key;
+        if (!string.IsNullOrWhiteSpace(currentKey))
+        {
+            return currentKey ?? string.Empty;
+        }
+
+        return current?.Name ?? string.Empty;
     }
 
     private Rectangle GetResizeGripRectangle()

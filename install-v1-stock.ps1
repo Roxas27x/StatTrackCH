@@ -7,6 +7,8 @@ $stockDll = Join-Path $outDir "StatTrack.dll"
 $patcherExe = Join-Path $outDir "V1StockAssemblyPatcher.exe"
 $desktopOverlayExe = Join-Path $outDir "StatTrackOverlay.exe"
 $canonicalCleanAssemblyPath = "C:\Users\Roxas\Documents\GDBOT\CHCLEANDONOTOVERWRITE\Clone Hero\Clone Hero_Data\Managed\Assembly-CSharp.dll"
+$canonicalCleanAssetPath = "C:\Users\Roxas\Documents\GDBOT\CHCLEANDONOTOVERWRITE\Clone Hero\Clone Hero_Data\sharedassets1.assets"
+$shaderPatcherScript = Join-Path $root "tools\patch_animated_menu_shader.py"
 
 function Resolve-GameDir {
     $candidateDirs = @()
@@ -35,12 +37,14 @@ function Resolve-GameDir {
 
 $gameDir = Resolve-GameDir
 $managedDir = Join-Path $gameDir "Clone Hero_Data\Managed"
+$dataDir = Join-Path $gameDir "Clone Hero_Data"
 $assemblyPath = Join-Path $managedDir "Assembly-CSharp.dll"
 $cleanBackupAssemblyPath = Join-Path $managedDir "Assembly-CSharp.dll.stocktracker.bak"
 $legacyBackupAssemblyPath = Join-Path $managedDir "Assembly-CSharp.sectiontracker-backup.dll"
 $targetHookDll = Join-Path $managedDir "StatTrack.dll"
 $targetOverlayExe = Join-Path $managedDir "StatTrackOverlay.exe"
 $legacyHookDll = Join-Path $managedDir "CloneHeroV1StockTracker.dll"
+$sharedAssetsPath = Join-Path $dataDir "sharedassets1.assets"
 
 if (-not (Test-Path $buildScript)) {
     throw "Missing build script: $buildScript"
@@ -68,6 +72,21 @@ Copy-Item -LiteralPath $desktopOverlayExe -Destination $targetOverlayExe -Force
 & $patcherExe $assemblyPath $targetHookDll
 if (Test-Path $legacyHookDll) {
     Remove-Item -LiteralPath $legacyHookDll -Force -ErrorAction SilentlyContinue
+}
+
+if (-not (Test-Path $sharedAssetsPath)) {
+    throw "Missing target asset: $sharedAssetsPath"
+}
+if (-not (Test-Path $canonicalCleanAssetPath)) {
+    throw "Missing clean asset: $canonicalCleanAssetPath"
+}
+
+Copy-Item -LiteralPath $canonicalCleanAssetPath -Destination $sharedAssetsPath -Force
+if (Test-Path $shaderPatcherScript) {
+    python $shaderPatcherScript $sharedAssetsPath $canonicalCleanAssetPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to patch animated menu wisps."
+    }
 }
 
 Write-Host "Installed stock tracker into $gameDir"

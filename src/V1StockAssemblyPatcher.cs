@@ -15,6 +15,7 @@ internal static class V1StockAssemblyPatcher
     private const string HookTypeName = "CloneHeroSectionTracker.V1Stock.StockTrackerHooks";
     private const string UpdateHookMethodName = "OnGameManagerUpdate";
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
+    private const string MainMenuInputBlockHookMethodName = "ShouldBlockMainMenuInput";
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
     private const string VersionReplacementText =
@@ -173,8 +174,9 @@ internal static class V1StockAssemblyPatcher
         TypeDefinition? hookType = hookAssembly.MainModule.Types.FirstOrDefault(type => type.FullName == HookTypeName);
         MethodDefinition? updateHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == UpdateHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuHookMethodName && method.Parameters.Count == 1);
+        MethodDefinition? mainMenuInputBlockHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuInputBlockHookMethodName && method.Parameters.Count == 1 && method.ReturnType.FullName == "System.Boolean");
         MethodDefinition? noteMissHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == NoteMissHookMethodName && method.Parameters.Count == 2);
-        if (updateHookMethod == null || mainMenuHookMethod == null || noteMissHookMethod == null)
+        if (updateHookMethod == null || mainMenuHookMethod == null || mainMenuInputBlockHookMethod == null || noteMissHookMethod == null)
         {
             Console.Error.WriteLine("One or more hook methods were not found in the helper assembly.");
             return 1;
@@ -208,6 +210,7 @@ internal static class V1StockAssemblyPatcher
         }
 
         MethodReference importedMainMenuHook = targetModule.ImportReference(mainMenuHookMethod);
+        MethodReference importedMainMenuInputBlockHook = targetModule.ImportReference(mainMenuInputBlockHookMethod);
         if (RewriteLegacyHookCalls(mainMenuUpdateMethod, MainMenuHookMethodName, importedMainMenuHook))
         {
             patchesApplied++;
@@ -216,6 +219,12 @@ internal static class V1StockAssemblyPatcher
         if (!HasDesiredHookCall(mainMenuUpdateMethod, MainMenuHookMethodName))
         {
             InsertSingleArgHook(mainMenuUpdateMethod, importedMainMenuHook);
+            patchesApplied++;
+        }
+
+        if (!HasDesiredHookCall(mainMenuUpdateMethod, MainMenuInputBlockHookMethodName))
+        {
+            InsertSingleArgReturnIfTrueHook(mainMenuUpdateMethod, importedMainMenuInputBlockHook);
             patchesApplied++;
         }
 
@@ -283,6 +292,20 @@ internal static class V1StockAssemblyPatcher
         Instruction first = method.Body.Instructions[0];
         il.InsertBefore(first, il.Create(OpCodes.Ldarg_0));
         il.InsertBefore(first, il.Create(OpCodes.Call, hook));
+        method.Body.SimplifyMacros();
+        method.Body.OptimizeMacros();
+    }
+
+    private static void InsertSingleArgReturnIfTrueHook(MethodDefinition method, MethodReference hook)
+    {
+        ILProcessor il = method.Body.GetILProcessor();
+        Instruction first = method.Body.Instructions[0];
+        Instruction continueInstruction = il.Create(OpCodes.Nop);
+        il.InsertBefore(first, il.Create(OpCodes.Ldarg_0));
+        il.InsertBefore(first, il.Create(OpCodes.Call, hook));
+        il.InsertBefore(first, il.Create(OpCodes.Brfalse_S, continueInstruction));
+        il.InsertBefore(first, il.Create(OpCodes.Ret));
+        il.InsertBefore(first, continueInstruction);
         method.Body.SimplifyMacros();
         method.Body.OptimizeMacros();
     }
