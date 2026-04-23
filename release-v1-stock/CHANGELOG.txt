@@ -3,7 +3,6 @@ StatTrack - Changelog
 2026-04-22
 - Added a built-in Export Templates editor so text exports can be customized without waiting for a new build.
 - Added live animated main menu controls for tint color, wisp color, wisp size, and layer strengths.
-- New installs now ship with the current tuned animated menu defaults so players start from the same look out of the box.
 - Added automatic and manual NoteSplit section-list scrolling for long songs so the active section stays visible.
 - Improved export template editor focus and input blocking so typing in the editor does not bleed through to the main menu or overlay.
 - Polished the animated menu slider controls and related overlay UI for clearer visuals and easier tuning.
