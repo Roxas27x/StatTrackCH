@@ -1,14 +1,14 @@
-**StatTrack v1.0.4**
+**StatTrack v1.0.5**
 
-This release focuses on smoother gameplay and NoteSplit polish for Clone Hero v1.
+This release focuses on export customization, animated menu polish, and NoteSplit usability for Clone Hero v1.
 
 ## Highlights
-- Reduced hitching by idling export work when nothing is using it and moving more save/export work off the gameplay path.
-- Improved desktop overlay and NoteSplit rendering so overlays do less work during songs.
-- Fixed NoteSplit misses being credited to the wrong section at split boundaries.
-- Fixed NoteSplit mode toggles reverting when enabled from the menu or during a song.
-- Fixed large NoteSplit font clipping in the header, footer, attempts block, and section rows.
-- Updated NoteSplit row backgrounds so they scale cleanly with larger row heights.
+- Added a built-in Export Templates editor so text exports can be customized without waiting for a new build.
+- Added live animated main menu controls for tint color, wisp color, wisp size, and layer strengths.
+- New installs now ship with the current tuned animated menu defaults so players start from the same look out of the box.
+- Added automatic and manual NoteSplit section-list scrolling for long songs so the active section stays visible.
+- Improved export template editor focus and input blocking so typing in the editor does not bleed through to the main menu or overlay.
+- Polished the animated menu slider controls and related overlay UI for clearer visuals and easier tuning.
 
 ## Notes
 - For the safest install, use StatTrack on a clean Clone Hero copy instead of installing over an already modded folder.

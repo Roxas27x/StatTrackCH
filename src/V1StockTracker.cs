@@ -316,8 +316,8 @@ internal sealed class V1StockTracker
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.4";
-    private const string PublicVersionLabel = "StatTrack v1.0.4";
+    private const string PublicVersionNumber = "1.0.5";
+    private const string PublicVersionLabel = "StatTrack v1.0.5";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;
@@ -11091,20 +11091,20 @@ public sealed class TrackerConfig
     public ExportTemplateEditorConfig ExportTemplateEditor { get; set; } = new();
     public DesktopOverlayStyleConfig DesktopOverlayStyle { get; set; } = new();
     public Dictionary<string, string> ExportTemplateOverrides { get; set; } = new();
-    public float AnimatedMenuTintR { get; set; } = 0.6470588f;
-    public float AnimatedMenuTintG { get; set; } = 0.2784314f;
+    public float AnimatedMenuTintR { get; set; } = 0.0412391648f;
+    public float AnimatedMenuTintG { get; set; } = 0.0503815077f;
     public float AnimatedMenuTintB { get; set; } = 0.9882353f;
-    public float AnimatedMenuTintA { get; set; }
-    public float AnimatedMenuWispR { get; set; } = 1f;
-    public float AnimatedMenuWispG { get; set; } = 1f;
+    public float AnimatedMenuTintA { get; set; } = 1f;
+    public float AnimatedMenuWispR { get; set; } = 0.05090505f;
+    public float AnimatedMenuWispG { get; set; } = 0.7953426f;
     public float AnimatedMenuWispB { get; set; } = 1f;
     public float AnimatedMenuWispA { get; set; } = 0.58f;
-    public float AnimatedMenuWispSize { get; set; } = 0.68f;
-    public float AnimatedMenuTintBackgroundOverlayStrength { get; set; } = 0.35f;
-    public float AnimatedMenuTintCanvasOverlayStrength { get; set; }
-    public float AnimatedMenuTintRawImageStrength { get; set; }
-    public float AnimatedMenuTintMaterialStrength { get; set; }
-    public float AnimatedMenuTintOnGuiOverlayStrength { get; set; }
+    public float AnimatedMenuWispSize { get; set; } = 0f;
+    public float AnimatedMenuTintBackgroundOverlayStrength { get; set; } = 0.148905113f;
+    public float AnimatedMenuTintCanvasOverlayStrength { get; set; } = 0.09662717f;
+    public float AnimatedMenuTintRawImageStrength { get; set; } = 0.7034483f;
+    public float AnimatedMenuTintMaterialStrength { get; set; } = 1f;
+    public float AnimatedMenuTintOnGuiOverlayStrength { get; set; } = 1f;
 }
 
 public sealed class SongConfig
