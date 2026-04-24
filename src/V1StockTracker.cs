@@ -20,7 +20,11 @@ namespace CloneHeroSectionTracker.V1Stock
 {
 internal static class StatTrackDataPaths
 {
+#if STATTRACK_TELEMETRY_PILOT
+    internal const string CurrentDirectoryName = "StatTrackTelemetryPilot";
+#else
     internal const string CurrentDirectoryName = "StatTrack";
+#endif
 
     internal static string GetCurrentDataDirectory()
     {
@@ -62,7 +66,11 @@ public static class StockTrackerHooks
     private static readonly object Sync = new();
     private static readonly V1StockTracker Tracker = new();
     private const float TickIntervalSeconds = 0.5f;
+    private const float TelemetryTickIntervalSeconds = 0.1f;
     private static float _lastTickAt;
+#if STATTRACK_TELEMETRY_PILOT
+    private static float _lastTelemetryTickAt;
+#endif
     private static StockOverlayHost? _overlayHost;
     private static bool _overlayHostLogged;
     private static bool _gameManagerHookLogged;
@@ -85,6 +93,19 @@ public static class StockTrackerHooks
                 StockTrackerLog.WriteDebug("GameManagerUpdateHookEntered | type=" + gameManager.GetType().FullName);
             }
 
+#if STATTRACK_TELEMETRY_PILOT
+            if (Time.unscaledTime - _lastTelemetryTickAt < TelemetryTickIntervalSeconds)
+            {
+                return;
+            }
+
+            _lastTelemetryTickAt = Time.unscaledTime;
+            lock (Sync)
+            {
+                Tracker.CaptureTelemetryFrame(gameManager);
+            }
+            return;
+#else
             EnsureOverlayHost();
             if (Time.unscaledTime - _lastTickAt < TickIntervalSeconds)
             {
@@ -96,6 +117,7 @@ public static class StockTrackerHooks
             {
                 Tracker.Tick(gameManager);
             }
+#endif
         }
         catch (Exception ex)
         {
@@ -123,7 +145,9 @@ public static class StockTrackerHooks
                 Tracker.EnsureMenuReady(mainMenu);
             }
 
+#if !STATTRACK_TELEMETRY_PILOT
             EnsureOverlayHost();
+#endif
         }
         catch (Exception ex)
         {
@@ -145,7 +169,9 @@ public static class StockTrackerHooks
                 Tracker.EnsureSongSelectReady(songSelect);
             }
 
+#if !STATTRACK_TELEMETRY_PILOT
             EnsureOverlayHost();
+#endif
         }
         catch (Exception ex)
         {
@@ -320,7 +346,7 @@ internal sealed class StockOverlayHost : MonoBehaviour
     }
 }
 
-internal sealed class V1StockTracker
+internal sealed partial class V1StockTracker
 {
     private const BindingFlags AnyInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private const BindingFlags AnyStatic = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
@@ -338,8 +364,8 @@ internal sealed class V1StockTracker
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.5";
-    private const string PublicVersionLabel = "StatTrack v1.0.5";
+    private const string PublicVersionNumber = "1.0.6";
+    private const string PublicVersionLabel = "StatTrack v1.0.6";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
     private const int GitHubReleaseCheckTimeoutMs = 5000;
@@ -386,6 +412,7 @@ internal sealed class V1StockTracker
     private string _memoryPath = string.Empty;
     private string _configPath = string.Empty;
     private string _desktopStylePath = string.Empty;
+    private string _desktopOverlayCommandPath = string.Empty;
     private string _obsDir = string.Empty;
     private string _obsStatePath = string.Empty;
     private float _lastConfigReloadAt;
@@ -562,11 +589,16 @@ internal sealed class V1StockTracker
     private Vector2 _exportTemplateEditorTokenScroll;
     private Vector2 _exportTemplateEditorPreviewScroll;
     private Vector2 _exportTemplateEditorTextScroll;
+    private Vector2 _exportTemplateEditorSectionScroll;
     private string? _selectedExportTemplateId;
+    private string? _selectedExportTemplateSectionKey;
     private string? _exportTemplateEditorActiveTemplateId;
     private int _exportTemplateEditorActiveLineIndex;
     private int _exportTemplateEditorCursorIndex;
     private readonly Dictionary<string, string> _exportTemplateEditorDrafts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _exportTemplateSectionCounterDrafts = new(StringComparer.Ordinal);
+    private string? _exportTemplateSectionCounterActiveKey;
+    private int _exportTemplateSectionCounterCursorIndex;
     private readonly Dictionary<string, CompiledExportTemplate> _compiledExportTemplates = new(StringComparer.Ordinal);
     private int _compiledExportTemplatesVersion = -1;
     private readonly Dictionary<string, CompiledExportTemplate> _workerCompiledExportTemplates = new(StringComparer.Ordinal);
@@ -611,6 +643,7 @@ internal sealed class V1StockTracker
         _gameManagerType ??= gameManager.GetType();
         _activeGameManager = gameManager;
         CacheReflection();
+        ApplyPendingDesktopOverlayCommand();
 
         TrackerState state = BuildState(gameManager);
         _latestState = state;
@@ -655,10 +688,16 @@ internal sealed class V1StockTracker
         EnsureInitialized(mainMenu.GetType().Assembly);
         _gameManagerType ??= mainMenu.GetType().Assembly.GetType("GameManager");
         CacheReflection();
+#if STATTRACK_TELEMETRY_PILOT
+        FinalizeTelemetryAttemptFromMenu();
+        _telemetryViewerClient?.EnsureViewerRunning();
+        ApplyMainMenuVersionText(mainMenu);
+#else
         FlushPendingMenuPersistence();
         EnsureReleaseCheckStarted();
         ApplyMainMenuVersionText(mainMenu);
         ApplyAnimatedMenuTint();
+#endif
     }
 
     public void EnsureSongSelectReady(object songSelect)
@@ -666,13 +705,22 @@ internal sealed class V1StockTracker
         EnsureInitialized(songSelect.GetType().Assembly);
         _gameManagerType ??= songSelect.GetType().Assembly.GetType("GameManager");
         CacheReflection();
+#if STATTRACK_TELEMETRY_PILOT
+        FinalizeTelemetryAttemptFromMenu();
+        _telemetryViewerClient?.EnsureViewerRunning();
+#else
         FlushPendingMenuPersistence();
         ApplyAnimatedMenuTint();
+#endif
     }
 
     public bool ShouldBlockMainMenuInput(object mainMenu)
     {
+#if STATTRACK_TELEMETRY_PILOT
+        return false;
+#else
         return _overlayEditorVisible && _exportTemplateEditorVisible;
+#endif
     }
 
     private void EnsureReleaseCheckStarted()
@@ -884,6 +932,12 @@ internal sealed class V1StockTracker
 
     private string BuildMainMenuVersionText()
     {
+#if STATTRACK_TELEMETRY_PILOT
+        return
+            "StatTrack Telemetry Pilot v1.0.6\n" +
+            "<size=90%>Gameplay input capture build</size>\n" +
+            BuildTelemetryControllerStatusText();
+#else
         string versionText =
             PublicVersionLabel + "\n" +
             "<size=90%>Mod by Roxas27x</size>\n" +
@@ -899,6 +953,7 @@ internal sealed class V1StockTracker
         }
 
         return versionText;
+#endif
     }
 
     private void ApplyAnimatedMenuTint()
@@ -1800,7 +1855,7 @@ internal sealed class V1StockTracker
                 if (openExportTemplatesClicked)
                 {
                     _exportTemplateEditorVisible = true;
-                    EnsureSelectedExportTemplateId();
+                    PrepareExportTemplateEditorForState(state);
                 }
 
                 GUILayout.Label(string.Empty, GUILayout.Height(10f));
@@ -1893,7 +1948,7 @@ internal sealed class V1StockTracker
                 if (openExportTemplatesClicked)
                 {
                     _exportTemplateEditorVisible = true;
-                    EnsureSelectedExportTemplateId();
+                    PrepareExportTemplateEditorForState(state);
                 }
 
                 GUILayout.Label(string.Empty, GUILayout.Height(8f));
@@ -2094,18 +2149,29 @@ internal sealed class V1StockTracker
 
     private void RenderExportTemplateEditorContent(TrackerState state, Rect contentRect)
     {
+        EnsureSelectedExportTemplateId();
         ExportTemplateDefinition? selectedDefinition = GetSelectedExportTemplateDefinition();
         if (selectedDefinition == null)
         {
             return;
         }
 
-        string draftText = GetExportTemplateDraftText(selectedDefinition);
-        string savedText = GetEffectiveExportTemplateSource(selectedDefinition);
-        bool hasSavedOverride = EnsureExportTemplateOverrides().ContainsKey(selectedDefinition.TemplateId);
+        List<string> sectionOverrideKeys = GetCurrentSongSectionTemplateOverrideKeys(state, selectedDefinition, out SongConfig? sectionOverrideSongConfig, out string? sectionOverrideSongConfigKey);
+        string? selectedSectionOverrideKey = GetSelectedExportTemplateSectionKey(sectionOverrideKeys);
+        string draftKey = BuildExportTemplateDraftKey(selectedDefinition.TemplateId, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
+        string scopeText = BuildExportTemplateEditorScopeText(sectionOverrideSongConfigKey, selectedSectionOverrideKey);
+        bool isSectionScoped = !string.IsNullOrWhiteSpace(selectedSectionOverrideKey) && sectionOverrideSongConfig != null && !string.IsNullOrWhiteSpace(sectionOverrideSongConfigKey);
+        string sectionScopeHint = SupportsSongSectionExportTemplateOverrides(selectedDefinition) && sectionOverrideKeys.Count == 0
+            ? " Load into a song to edit section-specific overrides."
+            : string.Empty;
+        string draftText = GetExportTemplateDraftText(selectedDefinition, sectionOverrideSongConfig, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
+        string savedText = GetEffectiveExportTemplateSource(selectedDefinition, sectionOverrideSongConfig, selectedSectionOverrideKey);
+        bool hasSavedOverride = HasSavedExportTemplateOverride(selectedDefinition, sectionOverrideSongConfig, selectedSectionOverrideKey);
         bool isDirty = !string.Equals(draftText, savedText, StringComparison.Ordinal);
         bool differsFromDefault = !string.Equals(draftText, selectedDefinition.DefaultTemplate, StringComparison.Ordinal);
         bool templateValid = ExportTemplateEngine.TryCompile(selectedDefinition, draftText, out CompiledExportTemplate? compiledTemplate, out string? validationError, out int validationLine);
+        bool canReset = isSectionScoped ? hasSavedOverride : (hasSavedOverride || differsFromDefault);
+        string resetButtonLabel = isSectionScoped ? "RESET SECTION OVERRIDE" : "RESET TO DEFAULT";
 
         string previewText;
         string statusText;
@@ -2116,7 +2182,7 @@ internal sealed class V1StockTracker
             statusText = $"Invalid template on line {validationLine.ToString(CultureInfo.InvariantCulture)}: {validationError}";
             statusColor = new Color(1f, 0.45f, 0.45f, 1f);
         }
-        else if (TryBuildExportTemplatePreview(selectedDefinition, compiledTemplate, state, out string? generatedPreview, out string? unavailableMessage))
+        else if (TryBuildExportTemplatePreview(selectedDefinition, compiledTemplate, state, selectedSectionOverrideKey, out string? generatedPreview, out string? unavailableMessage))
         {
             previewText = generatedPreview ?? string.Empty;
             statusText = isDirty ? "Valid template. Unsaved changes are local to this editor until you press SAVE." : "Valid template. Saved output is live.";
@@ -2184,26 +2250,46 @@ internal sealed class V1StockTracker
         Rect editorRect = new Rect(listRect.xMax + gap, listRect.y, centerWidth, upperHeight);
         Rect helpRect = new Rect(editorRect.xMax + gap, listRect.y, rightWidth, upperHeight);
         Rect previewRect = new Rect(contentRect.x, listRect.yMax + gap, contentRect.width, previewHeight);
+        Rect templateListRect = listRect;
+        Rect sectionScopeRect = Rect.zero;
+        if (sectionOverrideKeys.Count > 0)
+        {
+            float sectionScopeHeight = Mathf.Clamp(listRect.height * 0.38f, 148f, 240f);
+            if (listRect.height - sectionScopeHeight - gap >= 140f)
+            {
+                templateListRect.height = listRect.height - sectionScopeHeight - gap;
+                sectionScopeRect = new Rect(listRect.x, templateListRect.yMax + gap, listRect.width, sectionScopeHeight);
+            }
+        }
+
+        Event? currentEvent = Event.current;
+        if (currentEvent != null &&
+            currentEvent.type == EventType.MouseDown &&
+            !editorRect.Contains(currentEvent.mousePosition) &&
+            !helpRect.Contains(currentEvent.mousePosition))
+        {
+            ClearExportTemplateEditorFocus();
+        }
 
         bool previousGuiEnabled = GUI.enabled;
         GUI.enabled = templateValid && isDirty;
         if (GUI.Toggle(saveRect, false, new GUIContent("SAVE"), GUI.skin.button))
         {
-            SaveExportTemplateDraft(selectedDefinition, draftText);
+            SaveExportTemplateDraft(selectedDefinition, draftText, sectionOverrideSongConfig, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
         }
 
         GUI.enabled = isDirty;
         if (GUI.Toggle(revertRect, false, new GUIContent("REVERT CHANGES"), GUI.skin.button))
         {
-            RevertExportTemplateDraft(selectedDefinition.TemplateId);
-            draftText = GetExportTemplateDraftText(selectedDefinition);
+            RevertExportTemplateDraft(draftKey);
+            draftText = GetExportTemplateDraftText(selectedDefinition, sectionOverrideSongConfig, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
         }
 
-        GUI.enabled = hasSavedOverride || differsFromDefault;
-        if (GUI.Toggle(resetRect, false, new GUIContent("RESET TO DEFAULT"), GUI.skin.button))
+        GUI.enabled = canReset;
+        if (GUI.Toggle(resetRect, false, new GUIContent(resetButtonLabel), GUI.skin.button))
         {
-            ResetExportTemplateOverride(selectedDefinition);
-            draftText = GetExportTemplateDraftText(selectedDefinition);
+            ResetExportTemplateOverride(selectedDefinition, sectionOverrideSongConfig, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
+            draftText = GetExportTemplateDraftText(selectedDefinition, sectionOverrideSongConfig, sectionOverrideSongConfigKey, selectedSectionOverrideKey);
         }
 
         GUI.enabled = previousGuiEnabled;
@@ -2212,23 +2298,58 @@ internal sealed class V1StockTracker
             _exportTemplateEditorVisible = false;
         }
 
-        GUI.Label(infoRect, $"Configure the text inside exported .txt files. Use {{token}} replacements and [[if token]] / [[ifnot token]] line guards.{Environment.NewLine}Changes stay local to this panel until you press SAVE.", introStyle);
+        GUI.Label(infoRect, $"Configure the text inside exported .txt files. Use {{token}} replacements and [[if token]] / [[ifnot token]] line guards.{Environment.NewLine}{scopeText}.{sectionScopeHint} Changes stay local to this panel until you press SAVE.", introStyle);
 
-        GUI.Box(listRect, GUIContent.none, GUI.skin.box);
+        GUI.Box(templateListRect, GUIContent.none, GUI.skin.box);
+        Rect helpContentRect = helpRect;
+        Rect counterEditorRect = Rect.zero;
+        SongMemory? editableSongMemory = null;
+        SectionMemory? editableSectionMemory = null;
+        bool showSectionCounterEditor =
+            isSectionScoped &&
+            selectedSectionOverrideKey != null &&
+            TryGetEditableSongSectionMemory(state, selectedSectionOverrideKey, out editableSongMemory, out editableSectionMemory);
+        if (showSectionCounterEditor)
+        {
+            float counterEditorHeight = Mathf.Clamp(helpRect.height * 0.40f, 170f, 230f);
+            float helpHeight = Math.Max(120f, helpRect.height - counterEditorHeight - gap);
+            helpContentRect = new Rect(helpRect.x, helpRect.y, helpRect.width, helpHeight);
+            counterEditorRect = new Rect(helpRect.x, helpContentRect.yMax + gap, helpRect.width, helpRect.height - helpHeight - gap);
+        }
+
         GUI.Box(editorRect, GUIContent.none, GUI.skin.box);
-        GUI.Box(helpRect, GUIContent.none, GUI.skin.box);
+        GUI.Box(helpContentRect, GUIContent.none, GUI.skin.box);
+        if (showSectionCounterEditor)
+        {
+            GUI.Box(counterEditorRect, GUIContent.none, GUI.skin.box);
+        }
         GUI.Box(previewRect, GUIContent.none, GUI.skin.box);
 
-        RenderExportTemplateList(listRect, categoryStyle);
-        string updatedDraftText = RenderExportTemplateEditorTextArea(editorRect, selectedDefinition, draftText, sectionHeaderStyle);
+        RenderExportTemplateList(templateListRect, categoryStyle);
+        if (sectionScopeRect.height > 0f)
+        {
+            GUI.Box(sectionScopeRect, GUIContent.none, GUI.skin.box);
+            string? currentSectionExportName = state.CurrentSectionStats != null
+                ? BuildSectionExportName(state.SectionStats, state.CurrentSectionStats)
+                : null;
+            RenderExportTemplateSectionScopeList(sectionScopeRect, sectionOverrideKeys, currentSectionExportName, categoryStyle);
+        }
+
+        string subtitleText = selectedDefinition.TemplateId + " | " + scopeText;
+        string updatedDraftText = RenderExportTemplateEditorTextArea(editorRect, selectedDefinition, draftText, subtitleText, sectionHeaderStyle);
         if (!string.Equals(updatedDraftText, draftText, StringComparison.Ordinal))
         {
-            SetExportTemplateDraftText(selectedDefinition.TemplateId, updatedDraftText);
+            SetExportTemplateDraftText(draftKey, updatedDraftText);
             draftText = updatedDraftText;
         }
 
-        RenderExportTemplateHelp(helpRect, selectedDefinition, sectionHeaderStyle, helpStyle);
-        RenderExportTemplatePreview(previewRect, statusText, previewText, sectionHeaderStyle, statusStyle, previewStyle);
+        RenderExportTemplateHelp(helpContentRect, selectedDefinition, sectionHeaderStyle, helpStyle);
+        if (showSectionCounterEditor && editableSongMemory != null && editableSectionMemory != null && selectedSectionOverrideKey != null)
+        {
+            RenderExportTemplateSectionCounterEditor(counterEditorRect, state, editableSongMemory, editableSectionMemory, selectedSectionOverrideKey, sectionHeaderStyle, helpStyle);
+        }
+        string? sectionFolderPath = GetExportTemplatePreviewFolderPath(state, selectedDefinition, selectedSectionOverrideKey);
+        RenderExportTemplatePreview(previewRect, statusText, previewText, sectionFolderPath, sectionHeaderStyle, statusStyle, previewStyle, helpStyle);
     }
 
     private void RenderExportTemplateList(Rect listRect, GUIStyle categoryStyle)
@@ -2252,6 +2373,7 @@ internal sealed class V1StockTracker
                 if (clicked && !selected)
                 {
                     _selectedExportTemplateId = definition.TemplateId;
+                    ClearExportTemplateEditorFocus();
                 }
             }
 
@@ -2262,7 +2384,328 @@ internal sealed class V1StockTracker
         GUILayout.EndArea();
     }
 
-    private string RenderExportTemplateEditorTextArea(Rect editorRect, ExportTemplateDefinition definition, string draftText, GUIStyle sectionHeaderStyle)
+    private void RenderExportTemplateSectionScopeList(Rect scopeRect, IReadOnlyList<string> sectionKeys, string? currentSectionExportName, GUIStyle categoryStyle)
+    {
+        Rect headerRect = new Rect(scopeRect.x + 10f, scopeRect.y + 8f, scopeRect.width - 20f, 20f);
+        GUI.Label(headerRect, "Current Song Sections", categoryStyle);
+
+        Rect scrollRect = new Rect(scopeRect.x + 8f, scopeRect.y + 30f, Mathf.Max(0f, scopeRect.width - 16f), Mathf.Max(0f, scopeRect.height - 38f));
+        GUILayout.BeginArea(scrollRect);
+        _exportTemplateEditorSectionScroll = GUILayout.BeginScrollView(
+            _exportTemplateEditorSectionScroll,
+            GUILayout.Width(scrollRect.width),
+            GUILayout.Height(scrollRect.height));
+
+        bool editingGlobalTemplate = string.IsNullOrWhiteSpace(_selectedExportTemplateSectionKey);
+        bool clickedGlobal = GUILayout.Toggle(editingGlobalTemplate, new GUIContent("GLOBAL (all sections)"), GUI.skin.button, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+        if (clickedGlobal && !editingGlobalTemplate)
+        {
+            _selectedExportTemplateSectionKey = null;
+            ClearExportTemplateEditorFocus();
+        }
+
+        GUILayout.Label(string.Empty, GUILayout.Height(4f));
+        foreach (string sectionKey in sectionKeys)
+        {
+            bool selected = string.Equals(_selectedExportTemplateSectionKey, sectionKey, StringComparison.Ordinal);
+            string label = string.Equals(sectionKey, currentSectionExportName, StringComparison.Ordinal)
+                ? sectionKey + " (current)"
+                : sectionKey;
+            bool clicked = GUILayout.Toggle(selected, new GUIContent(label), GUI.skin.button, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
+            if (clicked && !selected)
+            {
+                _selectedExportTemplateSectionKey = sectionKey;
+                ClearExportTemplateEditorFocus();
+            }
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+
+    private bool TryGetEditableSongSectionMemory(TrackerState state, string sectionExportName, out SongMemory? songMemory, out SectionMemory? sectionMemory)
+    {
+        songMemory = null;
+        sectionMemory = null;
+        if (state.Song == null || string.IsNullOrWhiteSpace(sectionExportName))
+        {
+            return false;
+        }
+
+        string songKey = state.Song.SongKey;
+        if (_runState.CachedSongMemory != null && string.Equals(_runState.CachedSongMemoryKey, songKey, StringComparison.Ordinal))
+        {
+            songMemory = _runState.CachedSongMemory;
+        }
+        else if (_memory.Songs.TryGetValue(songKey, out SongMemory? existingSongMemory) && existingSongMemory != null)
+        {
+            songMemory = existingSongMemory;
+        }
+        else
+        {
+            songMemory = EnsureSongMemory(state.Song, state.Sections);
+            _runState.CachedSongMemory = songMemory;
+            _runState.CachedSongMemoryKey = songKey;
+        }
+
+        sectionMemory = EnsureSectionMemory(songMemory, sectionExportName, songKey);
+        return true;
+    }
+
+    private static string BuildSectionCounterDraftKey(string songKey, string sectionExportName, string counterKey)
+    {
+        return songKey + "||" + sectionExportName + "||" + counterKey;
+    }
+
+    private string GetSectionCounterDraftValue(string songKey, string sectionExportName, string counterKey, int currentValue)
+    {
+        string draftKey = BuildSectionCounterDraftKey(songKey, sectionExportName, counterKey);
+        if (_exportTemplateSectionCounterDrafts.TryGetValue(draftKey, out string? draft))
+        {
+            return draft;
+        }
+
+        string initialValue = currentValue.ToString(CultureInfo.InvariantCulture);
+        _exportTemplateSectionCounterDrafts[draftKey] = initialValue;
+        return initialValue;
+    }
+
+    private void SetSectionCounterDraftValue(string songKey, string sectionExportName, string counterKey, string value)
+    {
+        string draftKey = BuildSectionCounterDraftKey(songKey, sectionExportName, counterKey);
+        _exportTemplateSectionCounterDrafts[draftKey] = SanitizeSectionCounterDraftText(value);
+    }
+
+    private void ResetSectionCounterDraftValues(string songKey, string sectionExportName, SectionMemory sectionMemory)
+    {
+        SetSectionCounterDraftValue(songKey, sectionExportName, "attempts", sectionMemory.Attempts.ToString(CultureInfo.InvariantCulture));
+        SetSectionCounterDraftValue(songKey, sectionExportName, "fcs_past", sectionMemory.RunsPast.ToString(CultureInfo.InvariantCulture));
+        SetSectionCounterDraftValue(songKey, sectionExportName, "killed_the_run", sectionMemory.KilledTheRun.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private string RenderSectionCounterInputField(Rect fieldRect, string fieldKey, string currentValue)
+    {
+        Event? currentEvent = Event.current;
+        bool selected = string.Equals(_exportTemplateSectionCounterActiveKey, fieldKey, StringComparison.Ordinal);
+        if (currentEvent != null &&
+            currentEvent.type == EventType.MouseDown &&
+            fieldRect.Contains(currentEvent.mousePosition))
+        {
+            _exportTemplateSectionCounterActiveKey = fieldKey;
+            _exportTemplateSectionCounterCursorIndex = (currentValue ?? string.Empty).Length;
+            _exportTemplateEditorActiveTemplateId = null;
+            currentEvent.Use();
+            selected = true;
+        }
+
+        GUIStyle textStyle = new GUIStyle(GUI.skin.label);
+        textStyle.alignment = TextAnchor.MiddleLeft;
+        textStyle.normal.textColor = Color.white;
+
+        GUI.Box(fieldRect, GUIContent.none, GUI.skin.box);
+        string displayValue = selected
+            ? BuildTemplateEditorDisplayLine(currentValue ?? string.Empty, _exportTemplateSectionCounterCursorIndex)
+            : (currentValue ?? string.Empty);
+        GUI.Label(new Rect(fieldRect.x + 4f, fieldRect.y + 1f, Mathf.Max(0f, fieldRect.width - 8f), fieldRect.height - 2f), displayValue, textStyle);
+
+        if (!selected || currentEvent == null || currentEvent.type != EventType.KeyDown)
+        {
+            return currentValue ?? string.Empty;
+        }
+
+        string safeValue = currentValue ?? string.Empty;
+        int cursorIndex = Mathf.Clamp(_exportTemplateSectionCounterCursorIndex, 0, safeValue.Length);
+        bool handled = false;
+        switch (currentEvent.keyCode)
+        {
+            case KeyCode.LeftArrow:
+                if (cursorIndex > 0)
+                {
+                    cursorIndex--;
+                }
+                handled = true;
+                break;
+            case KeyCode.RightArrow:
+                if (cursorIndex < safeValue.Length)
+                {
+                    cursorIndex++;
+                }
+                handled = true;
+                break;
+            case KeyCode.Home:
+                cursorIndex = 0;
+                handled = true;
+                break;
+            case KeyCode.End:
+                cursorIndex = safeValue.Length;
+                handled = true;
+                break;
+            case KeyCode.Backspace:
+                if (cursorIndex > 0)
+                {
+                    safeValue = safeValue.Remove(cursorIndex - 1, 1);
+                    cursorIndex--;
+                }
+                handled = true;
+                break;
+            case KeyCode.Delete:
+                if (cursorIndex < safeValue.Length)
+                {
+                    safeValue = safeValue.Remove(cursorIndex, 1);
+                }
+                handled = true;
+                break;
+        }
+
+        if (!handled && char.IsDigit(currentEvent.character))
+        {
+            safeValue = safeValue.Insert(cursorIndex, currentEvent.character.ToString());
+            cursorIndex++;
+            handled = true;
+        }
+
+        if (!handled)
+        {
+            return currentValue ?? string.Empty;
+        }
+
+        _exportTemplateSectionCounterCursorIndex = Mathf.Clamp(cursorIndex, 0, safeValue.Length);
+        currentEvent.Use();
+        return SanitizeSectionCounterDraftText(safeValue);
+    }
+
+    private static string SanitizeSectionCounterDraftText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        string safeValue = value ?? string.Empty;
+        StringBuilder builder = new(safeValue.Length);
+        foreach (char character in safeValue)
+        {
+            if (char.IsDigit(character))
+            {
+                builder.Append(character);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private void RenderExportTemplateSectionCounterEditor(Rect editorRect, TrackerState state, SongMemory songMemory, SectionMemory sectionMemory, string sectionExportName, GUIStyle sectionHeaderStyle, GUIStyle helpStyle)
+    {
+        if (state.Song == null)
+        {
+            return;
+        }
+
+        string songKey = state.Song.SongKey;
+        Rect titleRect = new Rect(editorRect.x + 10f, editorRect.y + 8f, editorRect.width - 20f, 20f);
+        Rect infoRect = new Rect(editorRect.x + 10f, editorRect.y + 28f, editorRect.width - 20f, 34f);
+        GUI.Label(titleRect, "Current Amounts", sectionHeaderStyle);
+        GUI.Label(infoRect, "Seed this section's saved counters here. Future tracking continues from these values.", helpStyle);
+
+        string attemptsDraft = GetSectionCounterDraftValue(songKey, sectionExportName, "attempts", sectionMemory.Attempts);
+        string fcsPastDraft = GetSectionCounterDraftValue(songKey, sectionExportName, "fcs_past", sectionMemory.RunsPast);
+        string killedDraft = GetSectionCounterDraftValue(songKey, sectionExportName, "killed_the_run", sectionMemory.KilledTheRun);
+
+        float labelWidth = 100f;
+        float fieldX = editorRect.x + 10f + labelWidth + 8f;
+        float fieldWidth = Math.Max(70f, editorRect.xMax - fieldX - 10f);
+        Rect attemptsLabelRect = new Rect(editorRect.x + 10f, editorRect.y + 66f, labelWidth, 20f);
+        Rect attemptsFieldRect = new Rect(fieldX, editorRect.y + 64f, fieldWidth, 22f);
+        Rect fcsLabelRect = new Rect(editorRect.x + 10f, editorRect.y + 94f, labelWidth, 20f);
+        Rect fcsFieldRect = new Rect(fieldX, editorRect.y + 92f, fieldWidth, 22f);
+        Rect killedLabelRect = new Rect(editorRect.x + 10f, editorRect.y + 122f, labelWidth, 20f);
+        Rect killedFieldRect = new Rect(fieldX, editorRect.y + 120f, fieldWidth, 22f);
+
+        float buttonsY = editorRect.y + 150f;
+        float buttonGap = 8f;
+        float buttonWidth = Math.Max(96f, (editorRect.width - 28f - buttonGap) * 0.5f);
+        if ((buttonWidth * 2f) + buttonGap > editorRect.width - 20f)
+        {
+            buttonWidth = Math.Max(96f, editorRect.width - 20f);
+        }
+
+        Rect applyRect = new Rect(editorRect.x + 10f, buttonsY, buttonWidth, 24f);
+        Rect resetRect = buttonWidth < editorRect.width - 30f
+            ? new Rect(applyRect.xMax + buttonGap, buttonsY, buttonWidth, 24f)
+            : new Rect(editorRect.x + 10f, buttonsY + 28f, buttonWidth, 24f);
+        float statusY = Math.Max(applyRect.yMax, resetRect.yMax) + 6f;
+        Rect statusRect = new Rect(editorRect.x + 10f, statusY, Math.Max(80f, editorRect.width - 20f), Math.Max(20f, editorRect.yMax - statusY - 8f));
+
+        GUI.Label(attemptsLabelRect, "Attempts", helpStyle);
+        GUI.Label(fcsLabelRect, "FCs Past", helpStyle);
+        GUI.Label(killedLabelRect, "Killed the Run", helpStyle);
+
+        string updatedAttemptsDraft = RenderSectionCounterInputField(attemptsFieldRect, BuildSectionCounterDraftKey(songKey, sectionExportName, "attempts"), attemptsDraft ?? string.Empty);
+        string updatedFcsPastDraft = RenderSectionCounterInputField(fcsFieldRect, BuildSectionCounterDraftKey(songKey, sectionExportName, "fcs_past"), fcsPastDraft ?? string.Empty);
+        string updatedKilledDraft = RenderSectionCounterInputField(killedFieldRect, BuildSectionCounterDraftKey(songKey, sectionExportName, "killed_the_run"), killedDraft ?? string.Empty);
+
+        if (!string.Equals(updatedAttemptsDraft, attemptsDraft, StringComparison.Ordinal))
+        {
+            attemptsDraft = SanitizeSectionCounterDraftText(updatedAttemptsDraft);
+            SetSectionCounterDraftValue(songKey, sectionExportName, "attempts", attemptsDraft);
+        }
+
+        if (!string.Equals(updatedFcsPastDraft, fcsPastDraft, StringComparison.Ordinal))
+        {
+            fcsPastDraft = SanitizeSectionCounterDraftText(updatedFcsPastDraft);
+            SetSectionCounterDraftValue(songKey, sectionExportName, "fcs_past", fcsPastDraft);
+        }
+
+        if (!string.Equals(updatedKilledDraft, killedDraft, StringComparison.Ordinal))
+        {
+            killedDraft = SanitizeSectionCounterDraftText(updatedKilledDraft);
+            SetSectionCounterDraftValue(songKey, sectionExportName, "killed_the_run", killedDraft);
+        }
+
+        bool attemptsValid = int.TryParse(attemptsDraft, NumberStyles.None, CultureInfo.InvariantCulture, out int parsedAttempts);
+        bool fcsPastValid = int.TryParse(fcsPastDraft, NumberStyles.None, CultureInfo.InvariantCulture, out int parsedFcsPast);
+        bool killedValid = int.TryParse(killedDraft, NumberStyles.None, CultureInfo.InvariantCulture, out int parsedKilledTheRun);
+        bool allValid = attemptsValid && fcsPastValid && killedValid;
+
+        bool previousGuiEnabled = GUI.enabled;
+        GUI.enabled = allValid;
+        bool applyClicked = GUI.Toggle(applyRect, false, new GUIContent("APPLY COUNTERS"), GUI.skin.button);
+        GUI.enabled = previousGuiEnabled;
+        bool resetClicked = GUI.Toggle(resetRect, false, new GUIContent("RESET DRAFTS"), GUI.skin.button);
+
+        string statusText = allValid
+            ? "Saved values update after APPLY COUNTERS."
+            : "Enter whole numbers only.";
+        GUIStyle statusStyle = new GUIStyle(helpStyle);
+        statusStyle.normal.textColor = allValid
+            ? new Color(0.78f, 0.9f, 1f, 0.95f)
+            : new Color(1f, 0.52f, 0.52f, 1f);
+        GUI.Label(statusRect, statusText, statusStyle);
+
+        if (resetClicked)
+        {
+            ResetSectionCounterDraftValues(songKey, sectionExportName, sectionMemory);
+        }
+
+        if (applyClicked && allValid)
+        {
+            bool changed =
+                sectionMemory.Attempts != parsedAttempts ||
+                sectionMemory.RunsPast != parsedFcsPast ||
+                sectionMemory.KilledTheRun != parsedKilledTheRun;
+            if (changed)
+            {
+                sectionMemory.Attempts = parsedAttempts;
+                sectionMemory.RunsPast = parsedFcsPast;
+                sectionMemory.KilledTheRun = parsedKilledTheRun;
+                MarkMemoryDirty(songKey);
+                SaveMemory();
+                RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
+            }
+        }
+    }
+
+    private string RenderExportTemplateEditorTextArea(Rect editorRect, ExportTemplateDefinition definition, string draftText, string subtitleText, GUIStyle sectionHeaderStyle)
     {
         Rect titleRect = new Rect(editorRect.x + 10f, editorRect.y + 8f, editorRect.width - 20f, 20f);
         Rect subtitleRect = new Rect(editorRect.x + 10f, editorRect.y + 28f, editorRect.width - 20f, 18f);
@@ -2277,7 +2720,7 @@ internal sealed class V1StockTracker
         lineNumberStyle.normal.textColor = new Color(0.68f, 0.8f, 0.94f, 0.94f);
 
         GUI.Label(titleRect, definition.Label, sectionHeaderStyle);
-        GUI.Label(subtitleRect, definition.TemplateId, subtitleStyle);
+        GUI.Label(subtitleRect, subtitleText, subtitleStyle);
 
         string normalizedDraft = (draftText ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n');
         List<string> lines = normalizedDraft.Split(new[] { '\n' }, StringSplitOptions.None).ToList();
@@ -2314,6 +2757,7 @@ internal sealed class V1StockTracker
                 _exportTemplateEditorActiveTemplateId = definition.TemplateId;
                 _exportTemplateEditorActiveLineIndex = i;
                 _exportTemplateEditorCursorIndex = (lines[i] ?? string.Empty).Length;
+                _exportTemplateSectionCounterActiveKey = null;
                 currentEvent.Use();
                 lineSelected = true;
             }
@@ -2377,9 +2821,6 @@ internal sealed class V1StockTracker
     {
         if (!string.Equals(_exportTemplateEditorActiveTemplateId, templateId, StringComparison.Ordinal))
         {
-            _exportTemplateEditorActiveTemplateId = templateId;
-            _exportTemplateEditorActiveLineIndex = 0;
-            _exportTemplateEditorCursorIndex = lines.Count > 0 ? lines[0].Length : 0;
             return;
         }
 
@@ -2396,7 +2837,8 @@ internal sealed class V1StockTracker
 
     private bool HandleExportTemplateEditorKeyboard(string templateId, List<string> lines)
     {
-        if (!string.Equals(_exportTemplateEditorActiveTemplateId, templateId, StringComparison.Ordinal) ||
+        if (_exportTemplateSectionCounterActiveKey != null ||
+            !string.Equals(_exportTemplateEditorActiveTemplateId, templateId, StringComparison.Ordinal) ||
             lines.Count == 0)
         {
             return false;
@@ -2567,11 +3009,13 @@ internal sealed class V1StockTracker
         GUILayout.EndArea();
     }
 
-    private void RenderExportTemplatePreview(Rect previewRect, string statusText, string previewText, GUIStyle sectionHeaderStyle, GUIStyle statusStyle, GUIStyle previewStyle)
+    private void RenderExportTemplatePreview(Rect previewRect, string statusText, string previewText, string? sectionFolderPath, GUIStyle sectionHeaderStyle, GUIStyle statusStyle, GUIStyle previewStyle, GUIStyle helpStyle)
     {
         Rect titleRect = new Rect(previewRect.x + 10f, previewRect.y + 8f, previewRect.width - 20f, 20f);
         Rect statusRect = new Rect(previewRect.x + 10f, previewRect.y + 30f, previewRect.width - 20f, 34f);
-        Rect scrollRect = new Rect(previewRect.x + 8f, previewRect.y + 66f, Mathf.Max(0f, previewRect.width - 16f), Mathf.Max(0f, previewRect.height - 74f));
+        bool showSectionFolder = !string.IsNullOrWhiteSpace(sectionFolderPath);
+        float footerHeight = showSectionFolder ? 56f : 0f;
+        Rect scrollRect = new Rect(previewRect.x + 8f, previewRect.y + 66f, Mathf.Max(0f, previewRect.width - 16f), Mathf.Max(0f, previewRect.height - 74f - footerHeight));
 
         GUI.Label(titleRect, "Preview", sectionHeaderStyle);
         GUI.Label(statusRect, statusText, statusStyle);
@@ -2585,6 +3029,36 @@ internal sealed class V1StockTracker
         GUILayout.Label(previewValue, previewStyle, GUILayout.Width(Mathf.Max(0f, scrollRect.width - 26f)));
         GUILayout.EndScrollView();
         GUILayout.EndArea();
+
+        if (!showSectionFolder)
+        {
+            return;
+        }
+
+        Rect footerTopRect = new Rect(previewRect.x + 10f, previewRect.yMax - 52f, previewRect.width - 20f, 18f);
+        Rect pathRect = new Rect(previewRect.x + 10f, previewRect.yMax - 34f, Mathf.Max(120f, previewRect.width - 154f), 18f);
+        Rect buttonRect = new Rect(previewRect.xMax - 128f, previewRect.yMax - 38f, 118f, 24f);
+        GUI.Label(footerTopRect, "Current section export folder", sectionHeaderStyle);
+        GUI.Label(pathRect, sectionFolderPath ?? string.Empty, helpStyle);
+        if (GUI.Toggle(buttonRect, false, new GUIContent("OPEN FOLDER"), GUI.skin.button))
+        {
+            OpenFolderInExplorer(sectionFolderPath ?? string.Empty, createDirectory: false);
+        }
+    }
+
+    private string? GetExportTemplatePreviewFolderPath(TrackerState state, ExportTemplateDefinition definition, string? selectedSectionOverrideKey)
+    {
+        if (state.Song == null ||
+            string.IsNullOrWhiteSpace(_obsDir) ||
+            string.IsNullOrWhiteSpace(selectedSectionOverrideKey) ||
+            !SupportsSongSectionExportTemplateOverrides(definition))
+        {
+            return null;
+        }
+
+        string safeSectionOverrideKey = selectedSectionOverrideKey ?? string.Empty;
+        string songDir = Path.Combine(_obsDir, "songs", SanitizeFileName(state.Song.SongKey ?? string.Empty));
+        return Path.Combine(songDir, "sections", SanitizeFileName(safeSectionOverrideKey));
     }
 
     private void EnsureSelectedExportTemplateId()
@@ -2600,6 +3074,31 @@ internal sealed class V1StockTracker
         _selectedExportTemplateId = ExportTemplateCatalog.All.FirstOrDefault()?.TemplateId;
     }
 
+    private void PrepareExportTemplateEditorForState(TrackerState state)
+    {
+        EnsureSelectedExportTemplateId();
+        ExportTemplateDefinition? selectedDefinition = GetSelectedExportTemplateDefinition();
+        if (state.Song != null)
+        {
+            if (selectedDefinition == null || !SupportsSongSectionExportTemplateOverrides(selectedDefinition))
+            {
+                _selectedExportTemplateId = "section.summary";
+                selectedDefinition = GetSelectedExportTemplateDefinition();
+            }
+
+            if (selectedDefinition != null && SupportsSongSectionExportTemplateOverrides(selectedDefinition) && state.CurrentSectionStats != null)
+            {
+                _selectedExportTemplateSectionKey = BuildSectionExportName(state.SectionStats, state.CurrentSectionStats);
+            }
+        }
+    }
+
+    private void ClearExportTemplateEditorFocus()
+    {
+        _exportTemplateEditorActiveTemplateId = null;
+        _exportTemplateSectionCounterActiveKey = null;
+    }
+
     private ExportTemplateDefinition? GetSelectedExportTemplateDefinition()
     {
         EnsureSelectedExportTemplateId();
@@ -2612,55 +3111,202 @@ internal sealed class V1StockTracker
         return ExportTemplateCatalog.TryGet(selectedTemplateId);
     }
 
-    private string GetExportTemplateDraftText(ExportTemplateDefinition definition)
+    private static bool SupportsSongSectionExportTemplateOverrides(ExportTemplateDefinition definition)
     {
-        return _exportTemplateEditorDrafts.TryGetValue(definition.TemplateId, out string? draft)
-            ? draft
-            : GetEffectiveExportTemplateSource(definition);
+        return definition.TemplateId == "section.name" ||
+            definition.TemplateId == "section.summary" ||
+            definition.TemplateId == "section.attempts" ||
+            definition.TemplateId == "section.fcs_past" ||
+            definition.TemplateId == "section.killed_the_run";
     }
 
-    private void SetExportTemplateDraftText(string templateId, string draftText)
+    private SongConfig? TryGetSongConfigForState(TrackerState state, out string? songConfigKey)
     {
-        _exportTemplateEditorDrafts[templateId] = draftText ?? string.Empty;
-    }
-
-    private void RevertExportTemplateDraft(string templateId)
-    {
-        _exportTemplateEditorDrafts.Remove(templateId);
-    }
-
-    private void SaveExportTemplateDraft(ExportTemplateDefinition definition, string draftText)
-    {
-        Dictionary<string, string> overrides = EnsureExportTemplateOverrides();
-        string normalizedDraft = draftText ?? string.Empty;
-        if (string.Equals(normalizedDraft, definition.DefaultTemplate, StringComparison.Ordinal))
+        songConfigKey = state.Song?.OverlayLayoutKey ?? state.Song?.SongKey;
+        if (string.IsNullOrWhiteSpace(songConfigKey))
         {
-            overrides.Remove(definition.TemplateId);
+            return null;
+        }
+
+        string resolvedSongConfigKey = songConfigKey!;
+        if (!_config.Songs.TryGetValue(resolvedSongConfigKey, out SongConfig? songConfig) || songConfig == null)
+        {
+            return null;
+        }
+
+        NormalizeSongSectionExportTemplateOverrides(songConfig);
+        return songConfig;
+    }
+
+    private List<string> GetCurrentSongSectionTemplateOverrideKeys(TrackerState state, ExportTemplateDefinition definition, out SongConfig? songConfig, out string? songConfigKey)
+    {
+        songConfig = null;
+        songConfigKey = null;
+        if (!SupportsSongSectionExportTemplateOverrides(definition))
+        {
+            return new List<string>();
+        }
+
+        songConfig = TryGetSongConfigForState(state, out songConfigKey);
+        if (songConfig == null || state.SectionStats.Count == 0)
+        {
+            return new List<string>();
+        }
+
+        return state.SectionStats
+            .Select(section => BuildSectionExportName(state.SectionStats, section))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private string? GetSelectedExportTemplateSectionKey(IReadOnlyList<string> sectionKeys)
+    {
+        if (_selectedExportTemplateSectionKey != null &&
+            sectionKeys.Contains(_selectedExportTemplateSectionKey, StringComparer.Ordinal))
+        {
+            return _selectedExportTemplateSectionKey;
+        }
+
+        _selectedExportTemplateSectionKey = null;
+        return null;
+    }
+
+    private static string BuildExportTemplateDraftKey(string templateId, string? songConfigKey, string? sectionExportName)
+    {
+        return string.IsNullOrWhiteSpace(songConfigKey) || string.IsNullOrWhiteSpace(sectionExportName)
+            ? templateId
+            : templateId + "||song:" + songConfigKey + "||section:" + sectionExportName;
+    }
+
+    private static string BuildExportTemplateEditorScopeText(string? songConfigKey, string? sectionExportName)
+    {
+        return string.IsNullOrWhiteSpace(songConfigKey) || string.IsNullOrWhiteSpace(sectionExportName)
+            ? "Global template"
+            : "Current song section override: " + sectionExportName;
+    }
+
+    private bool HasSavedExportTemplateOverride(ExportTemplateDefinition definition, SongConfig? songConfig, string? sectionExportName)
+    {
+        if (!string.IsNullOrWhiteSpace(sectionExportName) && songConfig != null)
+        {
+            string resolvedSectionExportName = sectionExportName!;
+            return HasSongSectionExportTemplateOverride(songConfig, definition.TemplateId, resolvedSectionExportName);
+        }
+
+        return EnsureExportTemplateOverrides().ContainsKey(definition.TemplateId);
+    }
+
+    private string GetExportTemplateDraftText(ExportTemplateDefinition definition, SongConfig? songConfig, string? songConfigKey, string? sectionExportName)
+    {
+        string draftKey = BuildExportTemplateDraftKey(definition.TemplateId, songConfigKey, sectionExportName);
+        return _exportTemplateEditorDrafts.TryGetValue(draftKey, out string? draft)
+            ? draft
+            : GetEffectiveExportTemplateSource(definition, songConfig, sectionExportName);
+    }
+
+    private void SetExportTemplateDraftText(string draftKey, string draftText)
+    {
+        _exportTemplateEditorDrafts[draftKey] = draftText ?? string.Empty;
+    }
+
+    private void RevertExportTemplateDraft(string draftKey)
+    {
+        _exportTemplateEditorDrafts.Remove(draftKey);
+    }
+
+    private void SaveExportTemplateDraft(ExportTemplateDefinition definition, string draftText, SongConfig? songConfig, string? songConfigKey, string? sectionExportName)
+    {
+        string normalizedDraft = draftText ?? string.Empty;
+        string draftKey = BuildExportTemplateDraftKey(definition.TemplateId, songConfigKey, sectionExportName);
+        if (!string.IsNullOrWhiteSpace(sectionExportName) && songConfig != null && !string.IsNullOrWhiteSpace(songConfigKey))
+        {
+            string resolvedSectionExportName = sectionExportName!;
+            Dictionary<string, Dictionary<string, string>> sectionTemplateOverrides = songConfig.SectionExportTemplateOverrides ??= new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+            if (string.Equals(normalizedDraft, GetEffectiveGlobalExportTemplateSource(definition), StringComparison.Ordinal))
+            {
+                if (sectionTemplateOverrides.TryGetValue(definition.TemplateId, out Dictionary<string, string>? sectionOverrides) &&
+                    sectionOverrides.Remove(resolvedSectionExportName))
+                {
+                    if (sectionOverrides.Count == 0)
+                    {
+                        sectionTemplateOverrides.Remove(definition.TemplateId);
+                    }
+                }
+            }
+            else
+            {
+                if (!sectionTemplateOverrides.TryGetValue(definition.TemplateId, out Dictionary<string, string>? sectionOverrides) || sectionOverrides == null)
+                {
+                    sectionOverrides = new Dictionary<string, string>(StringComparer.Ordinal);
+                    sectionTemplateOverrides[definition.TemplateId] = sectionOverrides;
+                }
+
+                sectionOverrides[resolvedSectionExportName] = normalizedDraft;
+            }
+
+            _exportTemplateEditorDrafts.Remove(draftKey);
+            MarkConfigDirty(songKey: songConfigKey, affectsExportTemplates: true);
         }
         else
         {
-            overrides[definition.TemplateId] = normalizedDraft;
-        }
+            Dictionary<string, string> overrides = EnsureExportTemplateOverrides();
+            if (string.Equals(normalizedDraft, definition.DefaultTemplate, StringComparison.Ordinal))
+            {
+                overrides.Remove(definition.TemplateId);
+            }
+            else
+            {
+                overrides[definition.TemplateId] = normalizedDraft;
+            }
 
-        _exportTemplateEditorDrafts.Remove(definition.TemplateId);
-        MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            _exportTemplateEditorDrafts.Remove(draftKey);
+            MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+        }
         RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
     }
 
-    private void ResetExportTemplateOverride(ExportTemplateDefinition definition)
+    private void ResetExportTemplateOverride(ExportTemplateDefinition definition, SongConfig? songConfig, string? songConfigKey, string? sectionExportName)
     {
-        bool removed = EnsureExportTemplateOverrides().Remove(definition.TemplateId);
-        _exportTemplateEditorDrafts.Remove(definition.TemplateId);
+        string draftKey = BuildExportTemplateDraftKey(definition.TemplateId, songConfigKey, sectionExportName);
+        bool removed = false;
+        if (!string.IsNullOrWhiteSpace(sectionExportName) && songConfig != null && !string.IsNullOrWhiteSpace(songConfigKey))
+        {
+            string resolvedSectionExportName = sectionExportName!;
+            if (songConfig.SectionExportTemplateOverrides != null &&
+                songConfig.SectionExportTemplateOverrides.TryGetValue(definition.TemplateId, out Dictionary<string, string>? sectionOverrides) &&
+                sectionOverrides != null)
+            {
+                removed = sectionOverrides.Remove(resolvedSectionExportName);
+                if (sectionOverrides.Count == 0)
+                {
+                    songConfig.SectionExportTemplateOverrides.Remove(definition.TemplateId);
+                }
+            }
+        }
+        else
+        {
+            removed = EnsureExportTemplateOverrides().Remove(definition.TemplateId);
+        }
+
+        _exportTemplateEditorDrafts.Remove(draftKey);
         if (removed)
         {
-            MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            if (!string.IsNullOrWhiteSpace(sectionExportName) && !string.IsNullOrWhiteSpace(songConfigKey))
+            {
+                MarkConfigDirty(songKey: songConfigKey, affectsExportTemplates: true);
+            }
+            else
+            {
+                MarkConfigDirty(affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            }
+
             RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
         }
     }
 
-    private bool TryBuildExportTemplatePreview(ExportTemplateDefinition definition, CompiledExportTemplate compiledTemplate, TrackerState state, out string? previewText, out string? unavailableMessage)
+    private bool TryBuildExportTemplatePreview(ExportTemplateDefinition definition, CompiledExportTemplate compiledTemplate, TrackerState state, string? sectionExportName, out string? previewText, out string? unavailableMessage)
     {
-        if (!TryCreateExportTemplatePreviewContext(definition, state, out ExportTemplateRenderContext? previewContext, out unavailableMessage) ||
+        if (!TryCreateExportTemplatePreviewContext(definition, state, sectionExportName, out ExportTemplateRenderContext? previewContext, out unavailableMessage) ||
             previewContext == null)
         {
             previewText = null;
@@ -2671,7 +3317,7 @@ internal sealed class V1StockTracker
         return true;
     }
 
-    private bool TryCreateExportTemplatePreviewContext(ExportTemplateDefinition definition, TrackerState state, out ExportTemplateRenderContext? context, out string? unavailableMessage)
+    private bool TryCreateExportTemplatePreviewContext(ExportTemplateDefinition definition, TrackerState state, string? sectionExportName, out ExportTemplateRenderContext? context, out string? unavailableMessage)
     {
         switch (definition.PreviewContextKind)
         {
@@ -2733,7 +3379,14 @@ internal sealed class V1StockTracker
                 return true;
 
             case ExportTemplatePreviewContextKind.Section:
-                SectionStatsState? previewSection = state.CurrentSectionStats ?? state.SectionStats.FirstOrDefault();
+                SectionStatsState? previewSection = null;
+                if (!string.IsNullOrWhiteSpace(sectionExportName))
+                {
+                    previewSection = state.SectionStats.FirstOrDefault(candidate =>
+                        string.Equals(BuildSectionExportName(state.SectionStats, candidate), sectionExportName, StringComparison.Ordinal));
+                }
+
+                previewSection ??= state.CurrentSectionStats ?? state.SectionStats.FirstOrDefault();
                 if (previewSection == null)
                 {
                     context = null;
@@ -2741,7 +3394,7 @@ internal sealed class V1StockTracker
                     return false;
                 }
 
-                string sectionExportName = state.SectionStats.Count > 0
+                string previewSectionExportName = state.SectionStats.Count > 0
                     ? BuildSectionExportName(state.SectionStats, previewSection)
                     : previewSection.Name;
                 string sectionLabel;
@@ -2754,7 +3407,7 @@ internal sealed class V1StockTracker
                         break;
                     case "section.name":
                         sectionLabel = "Section Name";
-                        sectionValue = sectionExportName;
+                        sectionValue = previewSectionExportName;
                         break;
                     case "section.summary":
                         sectionLabel = "Section Summary";
@@ -2778,7 +3431,7 @@ internal sealed class V1StockTracker
                         break;
                 }
 
-                context = CreateSectionTemplateContext(state, previewSection, sectionExportName, sectionLabel, sectionValue);
+                context = CreateSectionTemplateContext(state, previewSection, previewSectionExportName, sectionLabel, sectionValue);
                 unavailableMessage = null;
                 return true;
 
@@ -4126,6 +4779,47 @@ internal sealed class V1StockTracker
         _loggedInvalidTemplateSources.Clear();
     }
 
+    private void NormalizeLoadedSongSectionExportTemplateOverrides()
+    {
+        if (_config.Songs == null)
+        {
+            return;
+        }
+
+        foreach (SongConfig? songConfig in _config.Songs.Values)
+        {
+            if (songConfig == null)
+            {
+                continue;
+            }
+
+            NormalizeSongSectionExportTemplateOverrides(songConfig);
+        }
+    }
+
+    private static void NormalizeSongSectionExportTemplateOverrides(SongConfig songConfig)
+    {
+        Dictionary<string, Dictionary<string, string>> normalized = new(StringComparer.Ordinal);
+        if (songConfig.SectionExportTemplateOverrides != null)
+        {
+            foreach (KeyValuePair<string, Dictionary<string, string>> templatePair in songConfig.SectionExportTemplateOverrides)
+            {
+                if (string.IsNullOrWhiteSpace(templatePair.Key))
+                {
+                    continue;
+                }
+
+                Dictionary<string, string> sectionOverrides = CloneStringDictionary(templatePair.Value);
+                if (sectionOverrides.Count > 0)
+                {
+                    normalized[templatePair.Key] = sectionOverrides;
+                }
+            }
+        }
+
+        songConfig.SectionExportTemplateOverrides = normalized;
+    }
+
     private EnabledTextExportSnapshot GetEnabledTextExportsSnapshot()
     {
         if (_enabledTextExportSnapshotVersion == _enabledTextExportsVersion)
@@ -5120,6 +5814,7 @@ internal sealed class V1StockTracker
         _memoryPath = Path.Combine(_dataDir, "memory.json");
         _configPath = Path.Combine(_dataDir, "config.json");
         _desktopStylePath = Path.Combine(_dataDir, "desktop-style.json");
+        _desktopOverlayCommandPath = Path.Combine(_dataDir, "desktop-overlay-command.json");
         _obsDir = Path.Combine(_dataDir, "obs");
         _obsStatePath = Path.Combine(_obsDir, "state.json");
         Directory.CreateDirectory(_dataDir);
@@ -5127,11 +5822,15 @@ internal sealed class V1StockTracker
         _basePlayerType = assemblyCSharp.GetType(BasePlayerTypeName);
         _gameSettingType = Type.GetType("StrikeCore.GameSetting, StrikeCore", throwOnError: false);
         Directory.CreateDirectory(_obsDir);
+#if STATTRACK_TELEMETRY_PILOT
+        InitializeTelemetryPilotData();
+#else
         EnsureExportWorkerStarted();
         _memory = LoadJson(_memoryPath, new TrackerMemory());
         _config = LoadJson(_configPath, new TrackerConfig());
         RefreshMergedDesktopOverlayStyle();
         NormalizeLoadedExportTemplateOverrides();
+        NormalizeLoadedSongSectionExportTemplateOverrides();
         _memoryDirty = !File.Exists(_memoryPath);
         _configDirty = !File.Exists(_configPath);
         _latestState = CreateIdleState();
@@ -5139,6 +5838,7 @@ internal sealed class V1StockTracker
         SaveDesktopOverlayStyle();
         SaveConfig();
         SaveMemory();
+#endif
         _initialized = true;
         StockTrackerLog.WriteDebug("Initialized stock tracker.");
     }
@@ -5290,6 +5990,81 @@ internal sealed class V1StockTracker
         _runState.LastGhostNotes = currentGhostNotes;
         _runState.LastOverstrums = currentOverstrums;
         _runState.LastMissedNotes = currentMissedNotes;
+    }
+
+    private void ApplyPendingDesktopOverlayCommand()
+    {
+#if STATTRACK_TELEMETRY_PILOT
+        return;
+#else
+        if (string.IsNullOrWhiteSpace(_desktopOverlayCommandPath) || !File.Exists(_desktopOverlayCommandPath))
+        {
+            return;
+        }
+
+        DesktopOverlayCommand command = LoadJson(_desktopOverlayCommandPath, new DesktopOverlayCommand());
+        if (!string.Equals(command.Kind, DesktopOverlayCommandKind.SetSongAttempts, StringComparison.Ordinal))
+        {
+            TryDeleteFile(_desktopOverlayCommandPath);
+            return;
+        }
+
+        string songKey = command.SongKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(songKey))
+        {
+            TryDeleteFile(_desktopOverlayCommandPath);
+            return;
+        }
+
+        int attempts = Math.Max(0, command.Attempts);
+        SongMemory songMemory;
+        if (_runState.CachedSongMemory != null &&
+            string.Equals(_runState.CachedSongMemoryKey, songKey, StringComparison.Ordinal))
+        {
+            songMemory = _runState.CachedSongMemory;
+        }
+        else if (_memory.Songs.TryGetValue(songKey, out SongMemory? existingSongMemory) && existingSongMemory != null)
+        {
+            songMemory = existingSongMemory;
+        }
+        else
+        {
+            songMemory = new SongMemory
+            {
+                Title = command.Title,
+                Artist = command.Artist
+            };
+            _memory.Songs[songKey] = songMemory;
+            MarkMemoryDirty(songKey, affectsSectionSnapshots: false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(command.Title) && string.IsNullOrWhiteSpace(songMemory.Title))
+        {
+            songMemory.Title = command.Title;
+        }
+
+        if (!string.IsNullOrWhiteSpace(command.Artist) && string.IsNullOrWhiteSpace(songMemory.Artist))
+        {
+            songMemory.Artist = command.Artist;
+        }
+
+        if (songMemory.Attempts != attempts)
+        {
+            songMemory.Attempts = attempts;
+            MarkMemoryDirty(songKey, affectsSectionSnapshots: false);
+            SaveMemory();
+            RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: true);
+            StockTrackerLog.Write($"DesktopOverlayAttemptsOverrideApplied | song={songKey} | attempts={attempts.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (_runState.CachedSongMemory != null &&
+            string.Equals(_runState.CachedSongMemoryKey, songKey, StringComparison.Ordinal))
+        {
+            _runState.CachedSongMemory.Attempts = attempts;
+        }
+
+        TryDeleteFile(_desktopOverlayCommandPath);
+#endif
     }
 
     private bool ShouldPreserveInSongStateDuringTransientContextLoss()
@@ -5568,18 +6343,33 @@ internal sealed class V1StockTracker
             ? GetCurrentSectionName(sections, currentSectionSongTime, currentChartTick)
             : string.Empty;
         LogTimingDiagnostics(song, sections, songTime, currentSectionSongTime, songDuration, isPractice, currentChartTick);
-        SongMemory songMemory =
-            requirements.NeedSongMemory
-                ? (_runState.CachedSongMemory != null &&
-                    string.Equals(_runState.CachedSongMemoryKey, song.SongKey, StringComparison.Ordinal)
-                        ? _runState.CachedSongMemory
-                        : EnsureSongMemory(song, sections))
-                : new SongMemory
-                {
-                    Title = song.Title,
-                    Artist = song.Artist,
-                    Charter = song.Charter
-                };
+        SongMemory songMemory;
+        if (requirements.NeedSongMemory)
+        {
+            songMemory =
+                _runState.CachedSongMemory != null &&
+                string.Equals(_runState.CachedSongMemoryKey, song.SongKey, StringComparison.Ordinal)
+                    ? _runState.CachedSongMemory
+                    : EnsureSongMemory(song, sections);
+        }
+        else if (_runState.CachedSongMemory != null &&
+            string.Equals(_runState.CachedSongMemoryKey, song.SongKey, StringComparison.Ordinal))
+        {
+            songMemory = _runState.CachedSongMemory;
+        }
+        else if (_memory.Songs.TryGetValue(song.SongKey, out SongMemory? existingSongMemory) && existingSongMemory != null)
+        {
+            songMemory = existingSongMemory;
+        }
+        else
+        {
+            songMemory = new SongMemory
+            {
+                Title = song.Title,
+                Artist = song.Artist,
+                Charter = song.Charter
+            };
+        }
         if (requirements.NeedSongMemory)
         {
             _runState.CachedSongMemory = songMemory;
@@ -8790,6 +9580,8 @@ internal sealed class V1StockTracker
             MarkConfigDirty(songKey: configKey);
         }
 
+        NormalizeSongSectionExportTemplateOverrides(songConfig);
+
         foreach (SectionDescriptor section in sectionList)
         {
             string sectionKey = BuildSectionOverlayKey(sectionList, section);
@@ -8807,6 +9599,7 @@ internal sealed class V1StockTracker
     private void ResetSongOverlay(SongConfig songConfig)
     {
         songConfig.TrackedSections.Clear();
+        songConfig.SectionExportTemplateOverrides.Clear();
         songConfig.OverlayWidgets.Clear();
         _overlayColorTargetKey = null;
         _sectionSnapshotCache = null;
@@ -8903,7 +9696,11 @@ internal sealed class V1StockTracker
         _wipeAllDataConfirmExpiresAt = 0f;
         _exportTemplateEditorVisible = false;
         _selectedExportTemplateId = null;
+        _selectedExportTemplateSectionKey = null;
         _exportTemplateEditorDrafts.Clear();
+        _exportTemplateSectionCounterDrafts.Clear();
+        _exportTemplateSectionCounterActiveKey = null;
+        _exportTemplateSectionCounterCursorIndex = 0;
         _compiledExportTemplates.Clear();
         _compiledExportTemplatesVersion = -1;
         _workerCompiledExportTemplates.Clear();
@@ -8943,6 +9740,7 @@ internal sealed class V1StockTracker
         DeleteIfExists(_memoryPath);
         DeleteIfExists(_configPath);
         DeleteIfExists(_desktopStylePath);
+        DeleteIfExists(_desktopOverlayCommandPath);
         DeleteIfExists(Path.Combine(_dataDir, "v1-stock.log"));
         DeleteIfExists(Path.Combine(_dataDir, "desktop-overlay.log"));
         DeleteIfExists(_obsStatePath);
@@ -8964,8 +9762,39 @@ internal sealed class V1StockTracker
                 return;
             }
 
-            Directory.CreateDirectory(_dataDir);
-            Process.Start("explorer.exe", "\"" + _dataDir + "\"");
+            OpenFolderInExplorer(_dataDir, createDirectory: true);
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+        }
+    }
+
+    private void OpenFolderInExplorer(string path, bool createDirectory)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            if (createDirectory)
+            {
+                Directory.CreateDirectory(path);
+            }
+
+            if (Directory.Exists(path))
+            {
+                Process.Start("explorer.exe", "\"" + path + "\"");
+                return;
+            }
+
+            string? parent = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(parent) && Directory.Exists(parent))
+            {
+                Process.Start("explorer.exe", "\"" + parent + "\"");
+            }
         }
         catch (Exception ex)
         {
@@ -9642,6 +10471,7 @@ internal sealed class V1StockTracker
                 ExportStateJson = exportStateJson,
                 ExportObs = exportObs,
                 ExportTemplateOverrides = CloneStringDictionary(_config.ExportTemplateOverrides),
+                SongSectionExportTemplateOverrides = CloneSongSectionExportTemplateOverridesForState(state),
                 ExportTemplateVersion = _exportTemplateVersion
             };
         }
@@ -9691,7 +10521,7 @@ internal sealed class V1StockTracker
         return false;
     }
 
-    private void ExportObsState(TrackerState state, string? stateJson, IReadOnlyDictionary<string, string> exportTemplateOverrides, int exportTemplateVersion)
+    private void ExportObsState(TrackerState state, string? stateJson, IReadOnlyDictionary<string, string> exportTemplateOverrides, IReadOnlyDictionary<string, Dictionary<string, string>> songSectionTemplateOverrides, int exportTemplateVersion)
     {
         if (!HasAnyTextExportEnabled(state))
         {
@@ -9764,11 +10594,11 @@ internal sealed class V1StockTracker
                 string sectionExportName = BuildSectionExportName(state.SectionStats, section);
                 string sectionDir = Path.Combine(sectionsDir, SanitizeFileName(sectionExportName));
                 Directory.CreateDirectory(sectionDir);
-                WriteObsText(Path.Combine(sectionDir, "name.txt"), RenderExportTemplate("section.name", CreateSectionTemplateContext(state, section, sectionExportName, "Section Name", sectionExportName), exportTemplateOverrides, exportTemplateVersion));
-                WriteObsText(Path.Combine(sectionDir, "summary.txt"), RenderExportTemplate("section.summary", CreateSectionTemplateContext(state, section, sectionExportName, "Section Summary", string.Empty), exportTemplateOverrides, exportTemplateVersion));
-                WriteObsText(Path.Combine(sectionDir, "attempts.txt"), RenderExportTemplate("section.attempts", CreateSectionTemplateContext(state, section, sectionExportName, "Attempts", section.Attempts.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
-                WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), RenderExportTemplate("section.fcs_past", CreateSectionTemplateContext(state, section, sectionExportName, "FCs Past", section.RunsPast.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
-                WriteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), RenderExportTemplate("section.killed_the_run", CreateSectionTemplateContext(state, section, sectionExportName, "Killed the Run", section.KilledTheRun.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "name.txt"), RenderSectionExportTemplate("section.name", sectionExportName, CreateSectionTemplateContext(state, section, sectionExportName, "Section Name", sectionExportName), exportTemplateOverrides, songSectionTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "summary.txt"), RenderSectionExportTemplate("section.summary", sectionExportName, CreateSectionTemplateContext(state, section, sectionExportName, "Section Summary", string.Empty), exportTemplateOverrides, songSectionTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "attempts.txt"), RenderSectionExportTemplate("section.attempts", sectionExportName, CreateSectionTemplateContext(state, section, sectionExportName, "Attempts", section.Attempts.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, songSectionTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), RenderSectionExportTemplate("section.fcs_past", sectionExportName, CreateSectionTemplateContext(state, section, sectionExportName, "FCs Past", section.RunsPast.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, songSectionTemplateOverrides, exportTemplateVersion));
+                WriteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), RenderSectionExportTemplate("section.killed_the_run", sectionExportName, CreateSectionTemplateContext(state, section, sectionExportName, "Killed the Run", section.KilledTheRun.ToString(CultureInfo.InvariantCulture)), exportTemplateOverrides, songSectionTemplateOverrides, exportTemplateVersion));
                 DeleteObsText(Path.Combine(sectionDir, "tracked.txt"));
                 DeleteObsText(Path.Combine(sectionDir, "start_time.txt"));
             }
@@ -9851,8 +10681,9 @@ internal sealed class V1StockTracker
 
                     if (workItem.ExportObs)
                     {
-                        ExportObsState(workItem.State, stateJson, workItem.ExportTemplateOverrides, workItem.ExportTemplateVersion);
+                        ExportObsState(workItem.State, stateJson, workItem.ExportTemplateOverrides, workItem.SongSectionExportTemplateOverrides, workItem.ExportTemplateVersion);
                     }
+
                 }
             }
             catch (Exception ex)
@@ -10086,7 +10917,8 @@ internal sealed class V1StockTracker
         {
             Title = config.Title,
             Artist = config.Artist,
-            Charter = config.Charter
+            Charter = config.Charter,
+            SectionExportTemplateOverrides = CloneNestedStringDictionary(config.SectionExportTemplateOverrides)
         };
 
         foreach (KeyValuePair<string, bool> pair in config.TrackedSections)
@@ -10153,6 +10985,35 @@ internal sealed class V1StockTracker
         }
 
         return clone;
+    }
+
+    private static Dictionary<string, Dictionary<string, string>> CloneNestedStringDictionary(Dictionary<string, Dictionary<string, string>>? source)
+    {
+        Dictionary<string, Dictionary<string, string>> clone = new(StringComparer.Ordinal);
+        if (source == null)
+        {
+            return clone;
+        }
+
+        foreach (KeyValuePair<string, Dictionary<string, string>> pair in source)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key))
+            {
+                continue;
+            }
+
+            clone[pair.Key] = CloneStringDictionary(pair.Value);
+        }
+
+        return clone;
+    }
+
+    private Dictionary<string, Dictionary<string, string>> CloneSongSectionExportTemplateOverridesForState(TrackerState state)
+    {
+        SongConfig? songConfig = TryGetSongConfigForState(state, out _);
+        return songConfig == null
+            ? new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal)
+            : CloneNestedStringDictionary(songConfig.SectionExportTemplateOverrides);
     }
 
     private static SectionMemory CloneSectionMemory(SectionMemory memory)
@@ -10347,15 +11208,26 @@ internal sealed class V1StockTracker
 
     private string RenderExportTemplate(string templateId, ExportTemplateRenderContext context)
     {
-        return ExportTemplateEngine.Render(GetCompiledExportTemplateForMain(templateId), context);
+        ExportTemplateDefinition definition = GetExportTemplateDefinition(templateId);
+        string source = GetEffectiveExportTemplateSource(definition);
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForMain(definition, source), context);
     }
 
     private string RenderExportTemplate(string templateId, ExportTemplateRenderContext context, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
     {
-        return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorker(templateId, templateOverrides, templateVersion), context);
+        ExportTemplateDefinition definition = GetExportTemplateDefinition(templateId);
+        string source = GetEffectiveGlobalExportTemplateSource(definition, templateOverrides);
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorker(definition, source, templateVersion), context);
     }
 
-    private CompiledExportTemplate GetCompiledExportTemplateForMain(string templateId)
+    private string RenderSectionExportTemplate(string templateId, string sectionExportName, ExportTemplateRenderContext context, IReadOnlyDictionary<string, string> templateOverrides, IReadOnlyDictionary<string, Dictionary<string, string>> songSectionTemplateOverrides, int templateVersion)
+    {
+        ExportTemplateDefinition definition = GetExportTemplateDefinition(templateId);
+        string source = GetEffectiveSectionExportTemplateSource(definition, sectionExportName, templateOverrides, songSectionTemplateOverrides);
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorker(definition, source, templateVersion), context);
+    }
+
+    private CompiledExportTemplate GetCompiledExportTemplateForMain(ExportTemplateDefinition definition, string source)
     {
         if (_compiledExportTemplatesVersion != _exportTemplateVersion)
         {
@@ -10363,21 +11235,18 @@ internal sealed class V1StockTracker
             _compiledExportTemplatesVersion = _exportTemplateVersion;
         }
 
-        if (_compiledExportTemplates.TryGetValue(templateId, out CompiledExportTemplate? compiledTemplate))
+        string cacheKey = BuildCompiledExportTemplateCacheKey(definition.TemplateId, source);
+        if (_compiledExportTemplates.TryGetValue(cacheKey, out CompiledExportTemplate? compiledTemplate))
         {
             return compiledTemplate;
         }
 
-        ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
-            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
-
-        string source = GetEffectiveExportTemplateSource(definition);
         CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source);
-        _compiledExportTemplates[templateId] = compiled;
+        _compiledExportTemplates[cacheKey] = compiled;
         return compiled;
     }
 
-    private CompiledExportTemplate GetCompiledExportTemplateForWorker(string templateId, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
+    private CompiledExportTemplate GetCompiledExportTemplateForWorker(ExportTemplateDefinition definition, string source, int templateVersion)
     {
         if (_workerCompiledExportTemplatesVersion != templateVersion)
         {
@@ -10385,20 +11254,26 @@ internal sealed class V1StockTracker
             _workerCompiledExportTemplatesVersion = templateVersion;
         }
 
-        if (_workerCompiledExportTemplates.TryGetValue(templateId, out CompiledExportTemplate? compiledTemplate))
+        string cacheKey = BuildCompiledExportTemplateCacheKey(definition.TemplateId, source);
+        if (_workerCompiledExportTemplates.TryGetValue(cacheKey, out CompiledExportTemplate? compiledTemplate))
         {
             return compiledTemplate;
         }
 
-        ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
-            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
-
-        string source = templateOverrides.TryGetValue(definition.TemplateId, out string? templateOverride)
-            ? (templateOverride ?? string.Empty)
-            : definition.DefaultTemplate;
         CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source);
-        _workerCompiledExportTemplates[templateId] = compiled;
+        _workerCompiledExportTemplates[cacheKey] = compiled;
         return compiled;
+    }
+
+    private static string BuildCompiledExportTemplateCacheKey(string templateId, string source)
+    {
+        return templateId + "\n" + (source ?? string.Empty);
+    }
+
+    private static ExportTemplateDefinition GetExportTemplateDefinition(string templateId)
+    {
+        return ExportTemplateCatalog.TryGet(templateId)
+            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
     }
 
     private CompiledExportTemplate CompileExportTemplateWithFallback(ExportTemplateDefinition definition, string source)
@@ -10417,10 +11292,62 @@ internal sealed class V1StockTracker
 
     private string GetEffectiveExportTemplateSource(ExportTemplateDefinition definition)
     {
-        Dictionary<string, string> overrides = EnsureExportTemplateOverrides();
-        return overrides.TryGetValue(definition.TemplateId, out string? templateOverride)
+        return GetEffectiveGlobalExportTemplateSource(definition);
+    }
+
+    private string GetEffectiveExportTemplateSource(ExportTemplateDefinition definition, SongConfig? songConfig, string? sectionExportName)
+    {
+        if (!string.IsNullOrWhiteSpace(sectionExportName) &&
+            songConfig != null &&
+            TryGetSongSectionExportTemplateOverride(songConfig, definition.TemplateId, sectionExportName!, out string? templateOverride))
+        {
+            return templateOverride ?? string.Empty;
+        }
+
+        return GetEffectiveGlobalExportTemplateSource(definition);
+    }
+
+    private string GetEffectiveGlobalExportTemplateSource(ExportTemplateDefinition definition)
+    {
+        return GetEffectiveGlobalExportTemplateSource(definition, EnsureExportTemplateOverrides());
+    }
+
+    private static string GetEffectiveGlobalExportTemplateSource(ExportTemplateDefinition definition, IReadOnlyDictionary<string, string> templateOverrides)
+    {
+        return templateOverrides.TryGetValue(definition.TemplateId, out string? templateOverride)
             ? (templateOverride ?? string.Empty)
             : definition.DefaultTemplate;
+    }
+
+    private static string GetEffectiveSectionExportTemplateSource(ExportTemplateDefinition definition, string sectionExportName, IReadOnlyDictionary<string, string> templateOverrides, IReadOnlyDictionary<string, Dictionary<string, string>> songSectionTemplateOverrides)
+    {
+        if (!string.IsNullOrWhiteSpace(sectionExportName) &&
+            songSectionTemplateOverrides.TryGetValue(definition.TemplateId, out Dictionary<string, string>? sectionOverrides) &&
+            sectionOverrides != null &&
+            sectionOverrides.TryGetValue(sectionExportName, out string? sectionTemplateOverride))
+        {
+            return sectionTemplateOverride ?? string.Empty;
+        }
+
+        return GetEffectiveGlobalExportTemplateSource(definition, templateOverrides);
+    }
+
+    private static bool TryGetSongSectionExportTemplateOverride(SongConfig songConfig, string templateId, string sectionExportName, out string? templateOverride)
+    {
+        templateOverride = null;
+        if (songConfig.SectionExportTemplateOverrides == null ||
+            !songConfig.SectionExportTemplateOverrides.TryGetValue(templateId, out Dictionary<string, string>? sectionOverrides) ||
+            sectionOverrides == null)
+        {
+            return false;
+        }
+
+        return sectionOverrides.TryGetValue(sectionExportName, out templateOverride);
+    }
+
+    private static bool HasSongSectionExportTemplateOverride(SongConfig songConfig, string templateId, string sectionExportName)
+    {
+        return TryGetSongSectionExportTemplateOverride(songConfig, templateId, sectionExportName, out _);
     }
 
     private void LogInvalidExportTemplate(ExportTemplateDefinition definition, string source, string? errorMessage, int errorLineNumber)
@@ -11208,6 +12135,7 @@ public sealed class SongConfig
     public string? Artist { get; set; }
     public string? Charter { get; set; }
     public Dictionary<string, bool> TrackedSections { get; set; } = new();
+    public Dictionary<string, Dictionary<string, string>> SectionExportTemplateOverrides { get; set; } = new();
     public Dictionary<string, OverlayWidgetConfig> OverlayWidgets { get; set; } = new();
 }
 
@@ -11481,6 +12409,21 @@ internal sealed class TextExportDefinition
     public string Label { get; }
 }
 
+internal static class DesktopOverlayCommandKind
+{
+    public const string SetSongAttempts = "set_song_attempts";
+}
+
+internal sealed class DesktopOverlayCommand
+{
+    public string? Kind { get; set; }
+    public string? SongKey { get; set; }
+    public string? Title { get; set; }
+    public string? Artist { get; set; }
+    public int Attempts { get; set; }
+    public string? IssuedAtUtc { get; set; }
+}
+
 internal sealed class TrackingRequirements
 {
     public bool NeedScore { get; set; }
@@ -11505,6 +12448,7 @@ internal sealed class ExportWorkItem
     public bool ExportStateJson { get; set; }
     public bool ExportObs { get; set; }
     public Dictionary<string, string> ExportTemplateOverrides { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, Dictionary<string, string>> SongSectionExportTemplateOverrides { get; set; } = new(StringComparer.Ordinal);
     public int ExportTemplateVersion { get; set; }
 }
 

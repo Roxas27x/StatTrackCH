@@ -1,5 +1,12 @@
 StatTrack - Changelog
 
+2026-04-23
+- Added per-song, per-section export template overrides so individual sections can use their own custom text formatting.
+- Added section counter seeding in the Export Templates editor for Attempts, FCs Past, and Killed the Run.
+- Preserved saved section counter values when their exports are disabled instead of showing them as reset to 0.
+- Added a direct folder shortcut in the Export Templates panel so players can open the exact current section export folder they are editing.
+- Added NoteSplit attempts editing by double-clicking the attempts count in the desktop NoteSplit header.
+
 2026-04-22
 - Added a built-in Export Templates editor so text exports can be customized without waiting for a new build.
 - Added live animated main menu controls for tint color, wisp color, wisp size, and layer strengths.
