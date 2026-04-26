@@ -15,14 +15,14 @@ internal static class V1StockAssemblyPatcher
     private const string HookTypeName = "CloneHeroSectionTracker.V1Stock.StockTrackerHooks";
     private const string UpdateHookMethodName = "OnGameManagerUpdate";
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
-    private const string SongSelectHookMethodName = "OnSongSelectUpdate";
+    private const string MainMenuEnableHookMethodName = "OnMainMenuEnable";
     private const string MainMenuInputBlockHookMethodName = "ShouldBlockMainMenuInput";
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
     private const string VersionReplacementText =
-        "StatTrack v1.0.6\n" +
+        "StatTrack v1.0.7\n" +
         "<size=90%>Mod by Roxas27x</size>\n" +
-        "<size=85%>Home / Ctrl +O / F8 to open the overlay</size>";
+        "<size=85%>Home / F8 to open the overlay</size>";
 
     private static readonly string[][] SubtitleFieldNameGroups =
     {
@@ -175,10 +175,10 @@ internal static class V1StockAssemblyPatcher
         TypeDefinition? hookType = hookAssembly.MainModule.Types.FirstOrDefault(type => type.FullName == HookTypeName);
         MethodDefinition? updateHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == UpdateHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuHookMethodName && method.Parameters.Count == 1);
-        MethodDefinition? songSelectHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == SongSelectHookMethodName && method.Parameters.Count == 1);
+        MethodDefinition? mainMenuEnableHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuEnableHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuInputBlockHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuInputBlockHookMethodName && method.Parameters.Count == 1 && method.ReturnType.FullName == "System.Boolean");
         MethodDefinition? noteMissHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == NoteMissHookMethodName && method.Parameters.Count == 2);
-        if (updateHookMethod == null || mainMenuHookMethod == null || songSelectHookMethod == null || mainMenuInputBlockHookMethod == null || noteMissHookMethod == null)
+        if (updateHookMethod == null || mainMenuHookMethod == null || mainMenuEnableHookMethod == null || mainMenuInputBlockHookMethod == null || noteMissHookMethod == null)
         {
             Console.Error.WriteLine("One or more hook methods were not found in the helper assembly.");
             return 1;
@@ -211,7 +211,15 @@ internal static class V1StockAssemblyPatcher
             return 1;
         }
 
+        MethodDefinition? mainMenuOnEnableMethod = mainMenu.Methods.FirstOrDefault(method => method.Name == "OnEnable" && !method.HasParameters);
+        if (mainMenuOnEnableMethod == null || !mainMenuOnEnableMethod.HasBody)
+        {
+            Console.Error.WriteLine("MainMenu.OnEnable() not found.");
+            return 1;
+        }
+
         MethodReference importedMainMenuHook = targetModule.ImportReference(mainMenuHookMethod);
+        MethodReference importedMainMenuEnableHook = targetModule.ImportReference(mainMenuEnableHookMethod);
         MethodReference importedMainMenuInputBlockHook = targetModule.ImportReference(mainMenuInputBlockHookMethod);
         if (RewriteLegacyHookCalls(mainMenuUpdateMethod, MainMenuHookMethodName, importedMainMenuHook))
         {
@@ -230,29 +238,9 @@ internal static class V1StockAssemblyPatcher
             patchesApplied++;
         }
 
-        TypeDefinition? songSelect = targetModule.Types.FirstOrDefault(type => type.Name == "SongSelect");
-        if (songSelect == null)
+        if (!HasDesiredHookCall(mainMenuOnEnableMethod, MainMenuEnableHookMethodName))
         {
-            Console.Error.WriteLine("SongSelect type not found.");
-            return 1;
-        }
-
-        MethodDefinition? songSelectUpdateMethod = songSelect.Methods.FirstOrDefault(method => method.Name == "Update" && !method.HasParameters);
-        if (songSelectUpdateMethod == null || !songSelectUpdateMethod.HasBody)
-        {
-            Console.Error.WriteLine("SongSelect.Update() not found.");
-            return 1;
-        }
-
-        MethodReference importedSongSelectHook = targetModule.ImportReference(songSelectHookMethod);
-        if (RewriteLegacyHookCalls(songSelectUpdateMethod, SongSelectHookMethodName, importedSongSelectHook))
-        {
-            patchesApplied++;
-        }
-
-        if (!HasDesiredHookCall(songSelectUpdateMethod, SongSelectHookMethodName))
-        {
-            InsertSingleArgHook(songSelectUpdateMethod, importedSongSelectHook);
+            InsertMainMenuEnableHook(mainMenuOnEnableMethod, importedMainMenuEnableHook);
             patchesApplied++;
         }
 
@@ -316,10 +304,25 @@ internal static class V1StockAssemblyPatcher
 
     private static void InsertSingleArgHook(MethodDefinition method, MethodReference hook)
     {
-        ILProcessor il = method.Body.GetILProcessor();
         Instruction first = method.Body.Instructions[0];
-        il.InsertBefore(first, il.Create(OpCodes.Ldarg_0));
-        il.InsertBefore(first, il.Create(OpCodes.Call, hook));
+        InsertSingleArgHookBefore(method, hook, first);
+    }
+
+    private static void InsertMainMenuEnableHook(MethodDefinition method, MethodReference hook)
+    {
+        Instruction insertBefore = method.Body.Instructions.FirstOrDefault(instruction =>
+            instruction.Operand is FieldReference field &&
+            string.Equals(field.FieldType.Name, "News", StringComparison.Ordinal))
+            ?? method.Body.Instructions[0];
+
+        InsertSingleArgHookBefore(method, hook, insertBefore);
+    }
+
+    private static void InsertSingleArgHookBefore(MethodDefinition method, MethodReference hook, Instruction insertBefore)
+    {
+        ILProcessor il = method.Body.GetILProcessor();
+        il.InsertBefore(insertBefore, il.Create(OpCodes.Ldarg_0));
+        il.InsertBefore(insertBefore, il.Create(OpCodes.Call, hook));
         method.Body.SimplifyMacros();
         method.Body.OptimizeMacros();
     }

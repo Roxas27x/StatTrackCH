@@ -1,13 +1,23 @@
-**StatTrack v1.0.6**
+**StatTrack v1.0.7**
 
-This release focuses on section-level export workflow improvements and a few quality-of-life upgrades for NoteSplit.
+This release is a smoothness and install-safety pass for Clone Hero v1. The goal is simple: less work during gameplay, fewer unnecessary exports/redraws, and a repeatable clean install path for every user.
 
 ## Highlights
-- Added per-song, per-section export template overrides so individual sections can use their own custom text formatting.
-- Added section counter seeding in the Export Templates editor so players can set starting values for Attempts, FCs Past, and Killed the Run.
-- Preserved saved section counter values when their exports are disabled instead of showing them as reset to 0.
-- Added a direct folder shortcut in the Export Templates panel so players can open the exact current section export folder they are editing.
-- Added NoteSplit attempts editing by double-clicking the attempts count in the desktop NoteSplit header.
+- Reduced in-song tracking work so StatTrack only reads stats required by active exports or NoteSplit.
+- Optimized NoteSplit and the desktop overlay to skip unnecessary redraws and state writes while a song is running.
+- Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
+- Kept section FC exports lightweight: only checked current-song sections stay in the active export path.
+- Added clean-baseline installation. The installer renames the user's existing `Assembly-CSharp.dll` and `sharedassets1.assets`, installs bundled clean copies, then applies StatTrack on top.
+- Replaced the stock main-menu News feed with StatTrack update history entries that link to GitHub releases.
+- Added a StatTrack Discord card to the top of the News feed.
+- Added keyboard focus controls for the News feed: Tab toggles focus, Right Arrow enters, and Left Arrow exits.
+- Removed stale Ctrl+O help text. Overlay hotkeys are now Home and F8.
 
-## Notes
-- For the safest install, use StatTrack on a clean Clone Hero copy instead of installing over an already modded folder.
+## Install Notes
+- Close Clone Hero before installing.
+- The installer renames existing game files instead of deleting them.
+- The release zip now includes `clean\Assembly-CSharp.dll`, `clean\sharedassets1.assets`, and `patched\sharedassets1.assets` so every install starts from the same baseline.
+
+## Verification
+- Build and runtime compatibility check passed locally.
+- Release package generated as `StatTrack-v1.0.7.zip`.

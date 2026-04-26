@@ -1,13 +1,19 @@
 StatTrack - Changelog
 
-2026-04-23
-- Added per-song, per-section export template overrides so individual sections can use their own custom text formatting.
-- Added section counter seeding in the Export Templates editor for Attempts, FCs Past, and Killed the Run.
-- Preserved saved section counter values when their exports are disabled instead of showing them as reset to 0.
-- Added a direct folder shortcut in the Export Templates panel so players can open the exact current section export folder they are editing.
-- Added NoteSplit attempts editing by double-clicking the attempts count in the desktop NoteSplit header.
+2026-04-26
+- Bumped the release to StatTrack v1.0.7.
+- Reduced in-song tracking/export work so active settings drive what the main thread reads and writes.
+- Optimized NoteSplit and desktop overlay updates to skip unnecessary redraws and state writes during gameplay.
+- Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
+- Kept current-song section FC exports lightweight by exporting only checked sections.
+- Updated the installer to rename existing Assembly-CSharp.dll and sharedassets1.assets files, install bundled clean baselines, then apply StatTrack on top.
+- Replaced the stock main-menu News feed with StatTrack update history entries that link to the matching GitHub releases.
+- Added a StatTrack Discord entry to the top of the main-menu News feed.
+- Added keyboard focus controls for the News feed: Tab toggles News focus, Right Arrow enters it, and Left Arrow exits it.
+- Removed stale Ctrl+O help text so user-facing hotkeys match Home and F8.
 
 2026-04-22
+- Installer now renames existing Assembly-CSharp.dll and sharedassets1.assets files, installs bundled clean baselines, then applies StatTrack on top of those clean files.
 - Added a built-in Export Templates editor so text exports can be customized without waiting for a new build.
 - Added live animated main menu controls for tint color, wisp color, wisp size, and layer strengths.
 - Added automatic and manual NoteSplit section-list scrolling for long songs so the active section stays visible.

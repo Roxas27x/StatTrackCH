@@ -13,11 +13,12 @@ $desktopOverlayExe = Join-Path $outDir "StatTrackOverlay.exe"
 $runtimeCheckerExe = Join-Path $outDir "V1RuntimeCompatibilityChecker.exe"
 $releaseTemplateDir = Join-Path $root "release-v1-stock"
 $releaseDir = Join-Path $outDir "release"
-$releasePatchedAsset = Join-Path $releaseDir "sharedassets1.assets.patched"
+$workspaceRoot = Split-Path -Parent $root
+$cleanAssemblyPath = Join-Path $workspaceRoot "Assembly-CSharp.dll"
+$cleanAssetPath = Join-Path $workspaceRoot "sharedassets1.assets"
+$shaderPatcherScript = Join-Path $root "tools\patch_animated_menu_shader.py"
 $cecilDll = Join-Path $root ".deps\cecil\Mono.Cecil.dll"
 $cecilRocksDll = Join-Path $root ".deps\cecil\Mono.Cecil.Rocks.dll"
-$canonicalCleanAssetPath = "C:\Users\Roxas\Documents\GDBOT\CHCLEANDONOTOVERWRITE\Clone Hero\Clone Hero_Data\sharedassets1.assets"
-$shaderPatcherScript = Join-Path $root "tools\patch_animated_menu_shader.py"
 $modernCsc = Join-Path $root ".deps\nuget\Microsoft.Net.Compilers.Toolset.4.10.0\tasks\net472\csc.exe"
 $legacyCsc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $csc = if (Test-Path $modernCsc) { $modernCsc } else { $legacyCsc }
@@ -63,11 +64,12 @@ if (-not (Test-Path (Join-Path $releaseTemplateDir "README.txt"))) { throw "Miss
 if (-not (Test-Path (Join-Path $releaseTemplateDir "version.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'version.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'RELEASE_NOTES.txt')" }
 if (-not (Test-Path (Join-Path $releaseTemplateDir "CHANGELOG.txt"))) { throw "Missing release template: $(Join-Path $releaseTemplateDir 'CHANGELOG.txt')" }
+if (-not (Test-Path $cleanAssemblyPath)) { throw "Missing bundled clean assembly: $cleanAssemblyPath" }
+if (-not (Test-Path $cleanAssetPath)) { throw "Missing bundled clean asset: $cleanAssetPath" }
+if (-not (Test-Path $shaderPatcherScript)) { throw "Missing shader patcher script: $shaderPatcherScript" }
 if (-not (Test-Path $csc)) { throw "Missing compiler: $csc" }
 if (-not (Test-Path $cecilDll)) { throw "Missing Mono.Cecil: $cecilDll" }
 if (-not (Test-Path $cecilRocksDll)) { throw "Missing Mono.Cecil.Rocks: $cecilRocksDll" }
-if (-not (Test-Path $canonicalCleanAssetPath)) { throw "Missing clean asset: $canonicalCleanAssetPath" }
-if (-not (Test-Path $shaderPatcherScript)) { throw "Missing shader patcher: $shaderPatcherScript" }
 
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
@@ -128,16 +130,22 @@ Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "README.txt") -Destination
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "version.txt") -Destination (Join-Path $releaseDir "version.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "RELEASE_NOTES.txt") -Destination (Join-Path $releaseDir "RELEASE_NOTES.txt") -Force
 Copy-Item -LiteralPath (Join-Path $releaseTemplateDir "CHANGELOG.txt") -Destination (Join-Path $releaseDir "CHANGELOG.txt") -Force
-Copy-Item -LiteralPath $canonicalCleanAssetPath -Destination $releasePatchedAsset -Force
-python $shaderPatcherScript $releasePatchedAsset $canonicalCleanAssetPath
-if ($LASTEXITCODE -ne 0) { throw "Failed to build patched animated menu asset for release." }
-$releasePatchedAssetBackup = $releasePatchedAsset + ".animatedmenu-runtime-tint.bak"
-$legacyReleasePatchedAssetBackup = Join-Path $releaseDir "sharedassets1.assets.animatedmenu-runtime-tint.bak"
-if (Test-Path $releasePatchedAssetBackup) {
-    Remove-Item -LiteralPath $releasePatchedAssetBackup -Force -ErrorAction SilentlyContinue
-}
-if (Test-Path $legacyReleasePatchedAssetBackup) {
-    Remove-Item -LiteralPath $legacyReleasePatchedAssetBackup -Force -ErrorAction SilentlyContinue
+
+$releaseCleanDir = Join-Path $releaseDir "clean"
+$releasePatchedDir = Join-Path $releaseDir "patched"
+New-Item -ItemType Directory -Force -Path $releaseCleanDir | Out-Null
+New-Item -ItemType Directory -Force -Path $releasePatchedDir | Out-Null
+$releaseCleanAssemblyPath = Join-Path $releaseCleanDir "Assembly-CSharp.dll"
+$releaseCleanAssetPath = Join-Path $releaseCleanDir "sharedassets1.assets"
+$releasePatchedAssetPath = Join-Path $releasePatchedDir "sharedassets1.assets"
+Copy-Item -LiteralPath $cleanAssemblyPath -Destination $releaseCleanAssemblyPath -Force
+Copy-Item -LiteralPath $cleanAssetPath -Destination $releaseCleanAssetPath -Force
+Copy-Item -LiteralPath $cleanAssetPath -Destination $releasePatchedAssetPath -Force
+python $shaderPatcherScript $releasePatchedAssetPath $releaseCleanAssetPath
+if ($LASTEXITCODE -ne 0) { throw "Failed to build patched sharedassets1.assets." }
+$releasePatchedAssetBackupPath = "$releasePatchedAssetPath.animatedmenu-runtime-tint.bak"
+if (Test-Path $releasePatchedAssetBackupPath) {
+    Remove-Item -LiteralPath $releasePatchedAssetBackupPath -Force
 }
 
 Write-Host "Built stock helper at $stockDll"

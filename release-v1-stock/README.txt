@@ -10,24 +10,22 @@ What it adds
 
 Recommended setup
 1. Close Clone Hero.
-2. Make a copy of your vanilla Clone Hero folder so you keep one untouched backup.
-3. Extract this release somewhere convenient.
-4. Double-click "Install StatTrack.cmd".
-5. Choose Y to install into "C:\Program Files\Clone Hero", or choose N to browse to a different Clone Hero folder.
-6. If you install into Program Files, approve the administrator prompt when Windows asks.
-7. Launch Clone Hero from that folder.
+2. Extract this release somewhere convenient.
+3. Double-click "Install StatTrack.cmd".
+4. Choose Y to install into "C:\Program Files\Clone Hero", or choose N to browse to a different Clone Hero folder.
+5. If you install into Program Files, approve the administrator prompt when Windows asks.
+6. Launch Clone Hero from that folder.
 
 What the installer does
 - checks that the selected folder is a real Clone Hero v1 install
-- creates a backup of "Clone Hero_Data\Managed\Assembly-CSharp.dll"
-- creates a backup of "Clone Hero_Data\sharedassets1.assets"
+- renames the existing "Clone Hero_Data\Managed\Assembly-CSharp.dll" and "Clone Hero_Data\sharedassets1.assets" instead of deleting them
+- installs bundled clean copies of both files so every install starts from the same baseline
 - copies in the tracker files
 - patches Assembly-CSharp.dll so the mod loads automatically
-- installs the animated menu asset patch used by StatTrack's menu tint and wisp controls
+- installs the StatTrack-patched sharedassets1.assets for the animated menu support
 
 Overlay hotkeys
 - Home
-- Ctrl+O
 - F8
 
 Tracker data location

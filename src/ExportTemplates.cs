@@ -198,7 +198,7 @@ internal static class ExportTemplateCatalog
             "FCs Past: {{fcs_past}}",
             "Killed the Run: {{killed_the_run}}")),
         CreateSection("section.attempts", "Section Attempts", JoinLines("{{attempts}}")),
-        CreateSection("section.fcs_past", "Section FCs Past", JoinLines("{{fcs_past}}")),
+        CreateSection("section.fcs_past", "Section FCs Past", JoinLines("FCs UP TO {{section_name}}: {{fcs_past}}")),
         CreateSection("section.killed_the_run", "Section Killed the Run", JoinLines("{{killed_the_run}}")),
 
         CreateRun("run.completed_at_utc", "Run Completed At UTC", JoinLines("Completed At UTC: {{completed_at_utc}}")),

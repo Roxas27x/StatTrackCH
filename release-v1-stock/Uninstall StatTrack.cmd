@@ -41,7 +41,7 @@ goto fail
 echo.
 echo StatTrack Uninstall
 echo -------------------
-echo This removes the tracker files and restores the backed up Assembly-CSharp.dll.
+echo This removes the tracker files and restores backed up game files when available.
 echo.
 
 call :resolveGameDir || goto fail
@@ -53,10 +53,10 @@ set "MANAGED_DIR=%GAME_DIR%\Clone Hero_Data\Managed"
 set "DATA_DIR=%GAME_DIR%\Clone Hero_Data"
 set "ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.dll"
 set "BACKUP_ASSEMBLY_PATH=%MANAGED_DIR%\Assembly-CSharp.sectiontracker-backup.dll"
+set "SHARED_ASSETS_PATH=%DATA_DIR%\sharedassets1.assets"
+set "BACKUP_SHARED_ASSETS_PATH=%DATA_DIR%\sharedassets1.assets.stattrack-backup"
 set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
 set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
-set "TARGET_ASSET=%DATA_DIR%\sharedassets1.assets"
-set "BACKUP_ASSET=%DATA_DIR%\sharedassets1.assets.stocktracker.bak"
 
 if exist "%BACKUP_ASSEMBLY_PATH%" (
     copy /y "%BACKUP_ASSEMBLY_PATH%" "%ASSEMBLY_PATH%" >nul
@@ -64,24 +64,23 @@ if exist "%BACKUP_ASSEMBLY_PATH%" (
         echo Failed to restore the original Assembly-CSharp.dll backup.
         goto fail
     )
-    del /f /q "%BACKUP_ASSEMBLY_PATH%" >nul 2>&1
-    echo Restored original Assembly-CSharp.dll backup.
+    echo Restored original Assembly-CSharp.dll backup. Backup retained at:
+    echo %BACKUP_ASSEMBLY_PATH%
 ) else (
     echo No tracker backup assembly was found.
     echo The tracker files will still be removed.
 )
 
-if exist "%BACKUP_ASSET%" (
-    copy /y "%BACKUP_ASSET%" "%TARGET_ASSET%" >nul
+if exist "%BACKUP_SHARED_ASSETS_PATH%" (
+    copy /y "%BACKUP_SHARED_ASSETS_PATH%" "%SHARED_ASSETS_PATH%" >nul
     if errorlevel 1 (
         echo Failed to restore the original sharedassets1.assets backup.
         goto fail
     )
-    del /f /q "%BACKUP_ASSET%" >nul 2>&1
-    echo Restored original sharedassets1.assets backup.
+    echo Restored original sharedassets1.assets backup. Backup retained at:
+    echo %BACKUP_SHARED_ASSETS_PATH%
 ) else (
-    echo No tracker backup asset was found.
-    echo The tracker files will still be removed.
+    echo No tracker backup sharedassets1.assets was found.
 )
 
 if exist "%TARGET_HOOK_DLL%" del /f /q "%TARGET_HOOK_DLL%" >nul 2>&1

@@ -1,11 +1,15 @@
-StatTrack v1.0.6
+StatTrack v1.0.7
 
-This release focuses on section-level export workflow improvements and a few quality-of-life upgrades for NoteSplit.
+This release focuses on smoother gameplay, lighter live exports, and a cleaner installer baseline.
 
-- Added per-song, per-section export template overrides so players can give individual sections their own custom text formatting.
-- Added section counter seeding in the Export Templates editor for Attempts, FCs Past, and Killed the Run.
-- Preserved saved section counter values when their exports are disabled instead of showing them as reset to 0.
-- Added a direct folder shortcut in the Export Templates panel so players can open the exact current section export folder they are editing.
-- Added NoteSplit attempts editing by double-clicking the attempts count in the desktop NoteSplit header.
+- Reduced in-song work so the tracker only reads, tracks, exports, or repaints what active settings actually need.
+- Optimized NoteSplit and desktop overlay updates to avoid unnecessary redraws while a song is running.
+- Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
+- Simplified section FC exports so only checked current-song sections stay in the live export path.
+- Added clean-baseline installation: the installer renames existing game files, installs bundled clean Assembly-CSharp.dll and sharedassets1.assets files, then applies StatTrack on top.
+- Replaced the stock main-menu News feed with StatTrack update history links.
+- Added a StatTrack Discord card to the top of the News feed.
+- Added Tab, Right Arrow, and Left Arrow keyboard focus controls for the News feed.
+- Removed stale Ctrl+O help text; the overlay hotkeys are Home and F8.
 
-For the safest install, use StatTrack on a clean Clone Hero copy instead of installing over an already modded folder.
+Installer note: existing Assembly-CSharp.dll and sharedassets1.assets files are renamed, not deleted.

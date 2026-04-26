@@ -6,7 +6,7 @@ cd /d "%~dp0"
 echo.
 echo StatTrack Full Cleanup
 echo ----------------------
-echo This removes the tracker files, restores the backed up Assembly-CSharp.dll,
+echo This removes the tracker files, restores backed up game files when available,
 echo and deletes %%LOCALAPPDATA%%\StatTrack.
 echo.
 set /p CONFIRM=Type WIPE to continue: 
