@@ -173,28 +173,7 @@ Older `name.txt`, `summary.txt`, `tracked.txt`, `start_time.txt`, `attempts.txt`
 
 ## Export Templates
 
-Open `EXPORT TEMPLATES` in the editor to customize OBS text output. Templates support simple token replacement:
-
-```text
-Current Streak: {{value}}
-```
-
-They also support one-line conditionals:
-
-```text
-[[if fc_achieved]]FC Achieved: {{fc_yes_no}}
-[[ifnot final_section]]Final Section: Unknown
-```
-
-Template categories:
-
-| Category | Used for |
-| --- | --- |
-| Metric | Current section, streaks, attempts, live miss counters, lifetime ghosts, FC achieved |
-| Section | Section summary and FCs Past templates |
-| Run | Completed-run files |
-
-The template editor shows the allowed tokens for the selected template and blocks saves with unknown tokens or bad directives.
+Open `EXPORT TEMPLATES` in the editor to customize FCs Past counters. this will be updated with the previous section files in a later update.
 
 ## Main Menu Animated Tint
 
