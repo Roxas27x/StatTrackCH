@@ -10,6 +10,7 @@ This release focuses on smoother gameplay, lighter live exports, and a cleaner i
 - Replaced the stock main-menu News feed with StatTrack update history links.
 - Added a StatTrack Discord card to the top of the News feed.
 - Added Tab, Right Arrow, and Left Arrow keyboard focus controls for the News feed.
+- Restored live animated main menu tint refreshes while browsing song select.
 - Removed stale Ctrl+O help text; the overlay hotkeys are Home and F8.
 
 Installer note: existing Assembly-CSharp.dll and sharedassets1.assets files are renamed, not deleted.

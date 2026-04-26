@@ -17,6 +17,7 @@ internal static class V1StockAssemblyPatcher
     private const string MainMenuHookMethodName = "OnMainMenuUpdate";
     private const string MainMenuEnableHookMethodName = "OnMainMenuEnable";
     private const string MainMenuInputBlockHookMethodName = "ShouldBlockMainMenuInput";
+    private const string SongSelectHookMethodName = "OnSongSelectUpdate";
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
     private const string VersionReplacementText =
@@ -177,8 +178,14 @@ internal static class V1StockAssemblyPatcher
         MethodDefinition? mainMenuHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuEnableHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuEnableHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuInputBlockHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuInputBlockHookMethodName && method.Parameters.Count == 1 && method.ReturnType.FullName == "System.Boolean");
+        MethodDefinition? songSelectHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == SongSelectHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? noteMissHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == NoteMissHookMethodName && method.Parameters.Count == 2);
-        if (updateHookMethod == null || mainMenuHookMethod == null || mainMenuEnableHookMethod == null || mainMenuInputBlockHookMethod == null || noteMissHookMethod == null)
+        if (updateHookMethod == null ||
+            mainMenuHookMethod == null ||
+            mainMenuEnableHookMethod == null ||
+            mainMenuInputBlockHookMethod == null ||
+            songSelectHookMethod == null ||
+            noteMissHookMethod == null)
         {
             Console.Error.WriteLine("One or more hook methods were not found in the helper assembly.");
             return 1;
@@ -241,6 +248,32 @@ internal static class V1StockAssemblyPatcher
         if (!HasDesiredHookCall(mainMenuOnEnableMethod, MainMenuEnableHookMethodName))
         {
             InsertMainMenuEnableHook(mainMenuOnEnableMethod, importedMainMenuEnableHook);
+            patchesApplied++;
+        }
+
+        TypeDefinition? songSelect = targetModule.Types.FirstOrDefault(type => type.Name == "SongSelect");
+        if (songSelect == null)
+        {
+            Console.Error.WriteLine("SongSelect type not found.");
+            return 1;
+        }
+
+        MethodDefinition? songSelectUpdateMethod = songSelect.Methods.FirstOrDefault(method => method.Name == "Update" && !method.HasParameters);
+        if (songSelectUpdateMethod == null || !songSelectUpdateMethod.HasBody)
+        {
+            Console.Error.WriteLine("SongSelect.Update() not found.");
+            return 1;
+        }
+
+        MethodReference importedSongSelectHook = targetModule.ImportReference(songSelectHookMethod);
+        if (RewriteLegacyHookCalls(songSelectUpdateMethod, SongSelectHookMethodName, importedSongSelectHook))
+        {
+            patchesApplied++;
+        }
+
+        if (!HasDesiredHookCall(songSelectUpdateMethod, SongSelectHookMethodName))
+        {
+            InsertSingleArgHook(songSelectUpdateMethod, importedSongSelectHook);
             patchesApplied++;
         }
 

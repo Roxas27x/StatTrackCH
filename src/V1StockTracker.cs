@@ -69,6 +69,7 @@ public static class StockTrackerHooks
     private static bool _overlayHostLogged;
     private static bool _gameManagerHookLogged;
     private static bool _mainMenuHookLogged;
+    private static bool _songSelectHookLogged;
     private static bool _overlayEnsureEnterLogged;
     private static bool _overlayEnsureExitLogged;
 
@@ -129,6 +130,32 @@ public static class StockTrackerHooks
             }
 
             EnsureOverlayHost();
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+        }
+    }
+
+    public static void OnSongSelectUpdate(object songSelect)
+    {
+        try
+        {
+            if (songSelect == null)
+            {
+                return;
+            }
+
+            if (!_songSelectHookLogged)
+            {
+                _songSelectHookLogged = true;
+                StockTrackerLog.WriteDebug("SongSelectUpdateHookEntered | type=" + songSelect.GetType().FullName);
+            }
+
+            lock (Sync)
+            {
+                Tracker.EnsureAnimatedMenuTintLive();
+            }
         }
         catch (Exception ex)
         {
@@ -772,6 +799,11 @@ internal sealed class V1StockTracker
         EnsureReleaseCheckStarted();
         ApplyMainMenuVersionText(mainMenu);
         HandleMainMenuNewsHotkeys(mainMenu);
+        ApplyAnimatedMenuTint();
+    }
+
+    public void EnsureAnimatedMenuTintLive()
+    {
         ApplyAnimatedMenuTint();
     }
 

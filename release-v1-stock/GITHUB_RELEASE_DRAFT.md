@@ -11,6 +11,7 @@ This release is a smoothness and install-safety pass for Clone Hero v1. The goal
 - Replaced the stock main-menu News feed with StatTrack update history entries that link to GitHub releases.
 - Added a StatTrack Discord card to the top of the News feed.
 - Added keyboard focus controls for the News feed: Tab toggles focus, Right Arrow enters, and Left Arrow exits.
+- Restored live animated main menu tint refreshes while browsing song select.
 - Removed stale Ctrl+O help text. Overlay hotkeys are now Home and F8.
 
 ## Install Notes
