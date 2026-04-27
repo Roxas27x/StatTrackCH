@@ -1,16 +1,17 @@
-StatTrack v1.0.7
+StatTrack v1.0.8
 
-This release focuses on smoother gameplay, lighter live exports, and a cleaner installer baseline.
+This release focuses on Song Speed control and steadier background export/write behavior during gameplay.
 
-- Reduced in-song work so the tracker only reads, tracks, exports, or repaints what active settings actually need.
-- Optimized NoteSplit and desktop overlay updates to avoid unnecessary redraws while a song is running.
-- Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
-- Simplified section FC exports so only checked current-song sections stay in the live export path.
-- Added clean-baseline installation: the installer renames existing game files, installs bundled clean Assembly-CSharp.dll and sharedassets1.assets files, then applies StatTrack on top.
-- Replaced the stock main-menu News feed with StatTrack update history links.
-- Added a StatTrack Discord card to the top of the News feed.
-- Added Tab, Right Arrow, and Left Arrow keyboard focus controls for the News feed.
-- Restored live animated main menu tint refreshes while browsing song select.
-- Removed stale Ctrl+O help text; the overlay hotkeys are Home and F8.
+- Song Speed now uses 1% as the default increment instead of the stock 5%.
+- Pressing orange while focused on Song Speed cycles the increment through 1%, 5%, 10%, and 50%, then back to 1%.
+- Song Speed can now be set from 1% up to 10000%.
+- Active-song export work is now coalesced before the background worker writes files, so rapid main-thread update requests are batched instead of firing back-to-back.
+- Active-song file writes are paced with short cooldowns between writes and export batches, reducing bursty disk activity during gameplay.
+- Overlay input checks now run every 0.05 seconds for responsive editor and menu input without returning to the old ultra-aggressive polling.
+- FCs Past exports now use a locked global fallback line: FCs UP TO {{section}}: {{fcs_past}}.
+- Each tracked section can optionally save one custom FCs Past override line.
+- A section override replaces the locked fallback only for that section.
+- Sections without overrides stay on the normal tracked-section export path and do not create extra redundant files.
+- Old global section.fcs_past overrides from the previous template attempt are ignored and scrubbed during template normalization.
 
-Installer note: existing Assembly-CSharp.dll and sharedassets1.assets files are renamed, not deleted.
+Installer note: existing Assembly-CSharp.dll and sharedassets1.assets files are backed up, not deleted.

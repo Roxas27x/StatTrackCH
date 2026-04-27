@@ -18,10 +18,14 @@ internal static class V1StockAssemblyPatcher
     private const string MainMenuEnableHookMethodName = "OnMainMenuEnable";
     private const string MainMenuInputBlockHookMethodName = "ShouldBlockMainMenuInput";
     private const string SongSelectHookMethodName = "OnSongSelectUpdate";
+    private const string FineSongSpeedChangeHookMethodName = "TryHandleFineSongSpeedChange";
     private const string NoteMissHookMethodName = "OnBasePlayerNoteMiss";
     private const string CustomTagHelperMethodName = "ApplyCustomMainMenuTags";
+    private const int SongSpeedMinimumPercent = 1;
+    private const int SongSpeedMaximumPercent = 10000;
+    private const int SongSpeedDefaultIncrementPercent = 1;
     private const string VersionReplacementText =
-        "StatTrack v1.0.7\n" +
+        "StatTrack v1.0.8\n" +
         "<size=90%>Mod by Roxas27x</size>\n" +
         "<size=85%>Home / F8 to open the overlay</size>";
 
@@ -179,12 +183,14 @@ internal static class V1StockAssemblyPatcher
         MethodDefinition? mainMenuEnableHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuEnableHookMethodName && method.Parameters.Count == 1);
         MethodDefinition? mainMenuInputBlockHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == MainMenuInputBlockHookMethodName && method.Parameters.Count == 1 && method.ReturnType.FullName == "System.Boolean");
         MethodDefinition? songSelectHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == SongSelectHookMethodName && method.Parameters.Count == 1);
+        MethodDefinition? fineSongSpeedChangeHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == FineSongSpeedChangeHookMethodName && method.Parameters.Count == 2 && method.ReturnType.FullName == "System.Boolean");
         MethodDefinition? noteMissHookMethod = hookType?.Methods.FirstOrDefault(method => method.Name == NoteMissHookMethodName && method.Parameters.Count == 2);
         if (updateHookMethod == null ||
             mainMenuHookMethod == null ||
             mainMenuEnableHookMethod == null ||
             mainMenuInputBlockHookMethod == null ||
             songSelectHookMethod == null ||
+            fineSongSpeedChangeHookMethod == null ||
             noteMissHookMethod == null)
         {
             Console.Error.WriteLine("One or more hook methods were not found in the helper assembly.");
@@ -277,6 +283,14 @@ internal static class V1StockAssemblyPatcher
             patchesApplied++;
         }
 
+        MethodReference importedFineSongSpeedChangeHook = targetModule.ImportReference(fineSongSpeedChangeHookMethod);
+        patchesApplied += ApplyFineSongSpeedChangeHook(targetModule, importedFineSongSpeedChangeHook);
+
+        if (ApplySongSpeedBoundsPatch(targetModule))
+        {
+            patchesApplied++;
+        }
+
         if (ApplyCustomSubtitlePatch(targetModule))
         {
             patchesApplied++;
@@ -333,6 +347,189 @@ internal static class V1StockAssemblyPatcher
         targetAssembly.Write(assemblyPath);
         Console.WriteLine("Patched Assembly-CSharp.dll successfully.");
         return 0;
+    }
+
+    private static int ApplyFineSongSpeedChangeHook(ModuleDefinition module, MethodReference hook)
+    {
+        int patchesApplied = 0;
+        patchesApplied += ApplyFineSongSpeedChangeHook(module, "SongOptions", hook);
+        patchesApplied += ApplyFineSongSpeedChangeHook(module, "BaseSettingMenu", hook);
+        return patchesApplied;
+    }
+
+    private static int ApplyFineSongSpeedChangeHook(ModuleDefinition module, string typeName, MethodReference hook)
+    {
+        TypeDefinition? type = module.Types.FirstOrDefault(candidate => string.Equals(candidate.Name, typeName, StringComparison.Ordinal));
+        if (type == null)
+        {
+            return 0;
+        }
+
+        int patchesApplied = 0;
+        patchesApplied += ApplyFineSongSpeedChangeHook(type, "ˁʳʼʶʽʶʿʷʻʵʻ", hook, 1);
+        patchesApplied += ApplyFineSongSpeedChangeHook(type, "ʷʺˀʸʾʺʽʴʻʳʶ", hook, -1);
+        patchesApplied += ApplyFineSongSpeedChangeHook(type, "ʺʴʼʶʼʷʽʳʺʾˀ", hook, 0);
+        return patchesApplied;
+    }
+
+    private static int ApplyFineSongSpeedChangeHook(TypeDefinition type, string methodName, MethodReference hook, int direction)
+    {
+        MethodDefinition? method = type.Methods.FirstOrDefault(candidate => candidate.Name == methodName && !candidate.HasParameters);
+        if (method == null || !method.HasBody || HasDesiredHookCall(method, FineSongSpeedChangeHookMethodName))
+        {
+            return 0;
+        }
+
+        InsertFineSongSpeedChangeHook(method, hook, direction);
+        return 1;
+    }
+
+    private static void InsertFineSongSpeedChangeHook(MethodDefinition method, MethodReference hook, int direction)
+    {
+        ILProcessor il = method.Body.GetILProcessor();
+        Instruction first = method.Body.Instructions[0];
+        Instruction continueInstruction = il.Create(OpCodes.Nop);
+        il.InsertBefore(first, il.Create(OpCodes.Ldarg_0));
+        il.InsertBefore(first, il.Create(OpCodes.Ldc_I4, direction));
+        il.InsertBefore(first, il.Create(OpCodes.Call, hook));
+        il.InsertBefore(first, il.Create(OpCodes.Brfalse_S, continueInstruction));
+        il.InsertBefore(first, il.Create(OpCodes.Ret));
+        il.InsertBefore(first, continueInstruction);
+        method.Body.SimplifyMacros();
+        method.Body.OptimizeMacros();
+    }
+
+    private static bool ApplySongSpeedBoundsPatch(ModuleDefinition module)
+    {
+        bool changed = false;
+        foreach (TypeDefinition type in module.Types)
+        {
+            foreach (MethodDefinition method in type.Methods.Where(method => method.HasBody))
+            {
+                bool methodChanged = false;
+                IList<Instruction> instructions = method.Body.Instructions;
+                for (int index = 0; index < instructions.Count; index++)
+                {
+                    if (instructions[index].OpCode != OpCodes.Ldstr ||
+                        instructions[index].Operand is not string settingName ||
+                        !string.Equals(settingName, "song_speed", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    methodChanged |= TryPatchSongSpeedConstructorArguments(instructions, index);
+                }
+
+                if (methodChanged)
+                {
+                    method.Body.SimplifyMacros();
+                    method.Body.OptimizeMacros();
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool TryPatchSongSpeedConstructorArguments(IList<Instruction> instructions, int songSpeedNameIndex)
+    {
+        int searchEnd = Math.Min(instructions.Count - 1, songSpeedNameIndex + 12);
+        bool foundConstructor = false;
+        List<int> integerLoadIndices = new();
+        for (int index = songSpeedNameIndex + 1; index <= searchEnd; index++)
+        {
+            Instruction instruction = instructions[index];
+            if (TryGetInt32Load(instruction, out _))
+            {
+                integerLoadIndices.Add(index);
+            }
+
+            if (instruction.OpCode == OpCodes.Newobj &&
+                instruction.Operand is MethodReference constructor &&
+                string.Equals(constructor.Name, ".ctor", StringComparison.Ordinal) &&
+                string.Equals(constructor.DeclaringType.FullName, "StrikeCore.GameSetting", StringComparison.Ordinal) &&
+                constructor.Parameters.Count == 6)
+            {
+                foundConstructor = true;
+                break;
+            }
+        }
+
+        if (!foundConstructor || integerLoadIndices.Count < 4)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        changed |= SetInt32LoadIfDifferent(instructions[integerLoadIndices[1]], SongSpeedMinimumPercent);
+        changed |= SetInt32LoadIfDifferent(instructions[integerLoadIndices[2]], SongSpeedMaximumPercent);
+        changed |= SetInt32LoadIfDifferent(instructions[integerLoadIndices[3]], SongSpeedDefaultIncrementPercent);
+        return changed;
+    }
+
+    private static bool SetInt32LoadIfDifferent(Instruction instruction, int value)
+    {
+        if (TryGetInt32Load(instruction, out int currentValue) && currentValue == value)
+        {
+            return false;
+        }
+
+        instruction.OpCode = OpCodes.Ldc_I4;
+        instruction.Operand = value;
+        return true;
+    }
+
+    private static bool TryGetInt32Load(Instruction instruction, out int value)
+    {
+        if (instruction.OpCode == OpCodes.Ldc_I4)
+        {
+            value = instruction.Operand is int intValue ? intValue : 0;
+            return instruction.Operand is int;
+        }
+
+        if (instruction.OpCode == OpCodes.Ldc_I4_S)
+        {
+            value = Convert.ToInt32(instruction.Operand);
+            return true;
+        }
+
+        switch (instruction.OpCode.Code)
+        {
+            case Code.Ldc_I4_M1:
+                value = -1;
+                return true;
+            case Code.Ldc_I4_0:
+                value = 0;
+                return true;
+            case Code.Ldc_I4_1:
+                value = 1;
+                return true;
+            case Code.Ldc_I4_2:
+                value = 2;
+                return true;
+            case Code.Ldc_I4_3:
+                value = 3;
+                return true;
+            case Code.Ldc_I4_4:
+                value = 4;
+                return true;
+            case Code.Ldc_I4_5:
+                value = 5;
+                return true;
+            case Code.Ldc_I4_6:
+                value = 6;
+                return true;
+            case Code.Ldc_I4_7:
+                value = 7;
+                return true;
+            case Code.Ldc_I4_8:
+                value = 8;
+                return true;
+            default:
+                value = 0;
+                return false;
+        }
     }
 
     private static void InsertSingleArgHook(MethodDefinition method, MethodReference hook)

@@ -62,7 +62,7 @@ public static class StockTrackerHooks
     private static readonly object Sync = new();
     private static readonly V1StockTracker Tracker = new();
     private const float TickIntervalSeconds = 0.5f;
-    private const float OverlayInputIntervalSeconds = 0.03f;
+    private const float OverlayInputIntervalSeconds = 0.05f;
     private static float _lastTickAt;
     private static float _lastOverlayInputAt;
     private static StockOverlayHost? _overlayHost;
@@ -225,6 +225,27 @@ public static class StockTrackerHooks
         }
     }
 
+    public static bool TryHandleFineSongSpeedChange(object menu, int direction)
+    {
+        try
+        {
+            if (menu == null)
+            {
+                return false;
+            }
+
+            lock (Sync)
+            {
+                return Tracker.TryHandleFineSongSpeedChange(menu, direction);
+            }
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write(ex);
+            return false;
+        }
+    }
+
     public static void OnOverlayGui()
     {
         try
@@ -372,15 +393,23 @@ internal sealed class V1StockTracker
     private static readonly int AnimatedMenuWispGlobalSizeId = Shader.PropertyToID(AnimatedMenuWispGlobalSizeName);
     private static readonly int AnimatedMenuWispGlobalEnabledId = Shader.PropertyToID(AnimatedMenuWispGlobalEnabledName);
     private static readonly bool VerboseLoggingEnabled = false;
+    private static readonly int[] SongSpeedIncrementSteps = { 1, 5, 10, 50 };
+    private static readonly Dictionary<string, string> EmptySectionFcsPastTemplateOverrides = new(StringComparer.Ordinal);
+    private const string SectionFcsPastTemplateId = "section.fcs_past";
+    private const string SectionFcsPastDefaultTemplate = "FCs UP TO {{section}}: {{fcs_past}}";
     private const float StateExportIntervalSeconds = 0.25f;
     private const float ObsExportIntervalSeconds = 0.25f;
+    private const int ActiveSongExportCoalesceMilliseconds = 90;
+    private const int ActiveSongExportBatchCooldownMilliseconds = 40;
+    private const int ActiveSongFileWriteMinIntervalMilliseconds = 18;
     private const float StableRunRefreshIntervalSeconds = 5f;
+    private const float OptionalRunMetricReadIntervalSeconds = 1.0f;
     private const float NotesHitRefreshIntervalSeconds = 2f;
     private const float ResultStatsRefreshIntervalSeconds = 1f;
     private const float TimingDiagnosticsIntervalSeconds = 0.5f;
     private const string NoteSplitModeExportKey = "note_split_mode";
-    private const string PublicVersionNumber = "1.0.7";
-    private const string PublicVersionLabel = "StatTrack v1.0.7";
+    private const string PublicVersionNumber = "1.0.8";
+    private const string PublicVersionLabel = "StatTrack v1.0.8";
     private const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/Roxas27x/StatTrackCH/releases/latest";
     private const string GitHubReleasePageBaseUrl = "https://github.com/Roxas27x/StatTrackCH/releases/tag/";
     private const string GitHubApiAcceptHeader = "application/vnd.github+json";
@@ -408,6 +437,13 @@ internal sealed class V1StockTracker
             "2026-04-26",
             "Join the Discord for suggestions, reports, and updates!",
             "https://discord.gg/VzNaZ3m4HC"
+        },
+        new[]
+        {
+            "StatTrack v1.0.8 - Song speed and FCs Past exports",
+            "2026-04-27",
+            "Added fine song speed increment cycling, wider speed bounds, faster overlay input checks, and per-section FCs Past export wording.",
+            GitHubReleasePageBaseUrl + "v1.0.8"
         },
         new[]
         {
@@ -489,6 +525,7 @@ internal sealed class V1StockTracker
     private string _memoryPath = string.Empty;
     private string _configPath = string.Empty;
     private string _desktopStylePath = string.Empty;
+    private string _noteSplitCommandsDir = string.Empty;
     private string _obsDir = string.Empty;
     private string _obsStatePath = string.Empty;
     private float _lastConfigReloadAt;
@@ -503,6 +540,7 @@ internal sealed class V1StockTracker
     private readonly HashSet<string> _knownMissingTextPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _ensuredDirectories = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _fileWriteSync = new();
+    private readonly object _backgroundWritePaceSync = new();
     private readonly object _exportWorkerSync = new();
     private readonly AutoResetEvent _exportSignal = new(false);
     private readonly object _updateCheckSync = new();
@@ -548,10 +586,13 @@ internal sealed class V1StockTracker
     private PropertyInfo? _noteStartTimeProperty;
     private Thread? _exportThread;
     private ExportWorkItem? _pendingExport;
+    private DateTime _lastBackgroundFileWriteUtc = DateTime.MinValue;
     private bool _obsCleanupPending = true;
     private float _lastDesktopOverlayNeededAt = -999f;
     private bool _forceStateExportPending;
     private bool _forceObsExportPending;
+    private int _songSpeedIncrementStepIndex;
+    private bool _fineSongSpeedAdjustFailureLogged;
     private bool _updateCheckStarted;
     private bool _updateAvailable;
     private string? _latestReleaseVersionLabel;
@@ -580,7 +621,6 @@ internal sealed class V1StockTracker
     private FieldInfo? _currentSectionTickField;
     private FieldInfo? _chartField;
     private FieldInfo? _controllerField;
-    private FieldInfo? _scoreField;
     private FieldInfo? _comboField;
     private FieldInfo? _ghostNotesField;
     private FieldInfo? _fretsBetweenNotesField;
@@ -592,10 +632,12 @@ internal sealed class V1StockTracker
     private FieldInfo? _globalVariablesSongSpeedField;
     private FieldInfo? _playerSettingsField;
     private FieldInfo? _gameSettingNameField;
-    private PropertyInfo? _gameSettingCurrentValueProperty;
     private PropertyInfo? _gameSettingPercentStringProperty;
     private FieldInfo? _songSpeedSettingField;
+    private FieldInfo? _songSpeedIncrementAmountField;
     private FieldInfo? _menuBackgroundSettingField;
+    private FieldInfo? _baseMenuActiveOptionField;
+    private FieldInfo? _baseMenuActiveField;
     private FieldInfo? _blackMenuRawImageField;
     private MethodInfo? _chartSectionsMethod;
     private MethodInfo? _chartSectionTimeMethod;
@@ -606,6 +648,9 @@ internal sealed class V1StockTracker
     private MethodInfo? _songEntryLoadChartWithFlagMethod;
     private MethodInfo? _loadedChartTickToTimeMethod;
     private MethodInfo? _loadedChartMaxTickMethod;
+    private MethodInfo? _songOptionsRefreshMethod;
+    private MethodInfo? _baseSettingMenuRefreshMethod;
+    private MethodInfo? _baseMenuSelectedOptionMethod;
     private PropertyInfo? _resultStatsArrayProperty;
     private Type? _playerStatsType;
     private PropertyInfo? _textComponentTextProperty;
@@ -756,6 +801,7 @@ internal sealed class V1StockTracker
         _gameManagerType ??= gameManager.GetType();
         _activeGameManager = gameManager;
         CacheReflection();
+        ProcessNoteSplitCommands();
 
         TrackerState state = BuildState(gameManager);
         _latestState = state;
@@ -810,6 +856,438 @@ internal sealed class V1StockTracker
     public bool ShouldBlockMainMenuInput(object mainMenu)
     {
         return _overlayEditorVisible && _exportTemplateEditorVisible;
+    }
+
+    public bool TryHandleFineSongSpeedChange(object menu, int direction)
+    {
+        EnsureInitialized(menu.GetType().Assembly);
+        _gameManagerType ??= menu.GetType().Assembly.GetType("GameManager");
+        CacheReflection();
+
+        if (IsMenuConfirmDialogActive(menu))
+        {
+            return false;
+        }
+
+        object? setting = TryGetActiveSongSpeedMenuSetting(menu);
+        if (setting == null && string.Equals(menu.GetType().Name, "SongOptions", StringComparison.Ordinal))
+        {
+            setting = TryGetSongSpeedSetting();
+        }
+
+        if (setting == null)
+        {
+            return false;
+        }
+
+        if (direction == 0)
+        {
+            _songSpeedIncrementStepIndex = (_songSpeedIncrementStepIndex + 1) % SongSpeedIncrementSteps.Length;
+            int incrementAmount = GetSongSpeedIncrementAmount();
+            if (!TrySetSongSpeedIncrementAmount(setting, incrementAmount))
+            {
+                LogFineSongSpeedAdjustFailure(menu, setting);
+            }
+
+            RefreshSongSpeedMenu(menu);
+            StockTrackerLog.Write($"SongSpeedIncrementStep | step={incrementAmount}");
+            return true;
+        }
+
+        EnsureSongSpeedMenuSettingActive(menu, setting);
+        if (!TrySetSongSpeedIncrementAmount(setting, GetSongSpeedIncrementAmount()))
+        {
+            LogFineSongSpeedAdjustFailure(menu, setting);
+        }
+
+        return false;
+    }
+
+    private int GetSongSpeedIncrementAmount()
+    {
+        if (_songSpeedIncrementStepIndex < 0 || _songSpeedIncrementStepIndex >= SongSpeedIncrementSteps.Length)
+        {
+            _songSpeedIncrementStepIndex = 0;
+        }
+
+        return SongSpeedIncrementSteps[_songSpeedIncrementStepIndex];
+    }
+
+    private bool IsMenuConfirmDialogActive(object menu)
+    {
+        foreach (FieldInfo field in GetAllFields(menu.GetType()))
+        {
+            if (!string.Equals(field.FieldType.Name, "ConfirmationMenu", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            object? confirmMenu = SafeGetFieldValue(field, menu);
+            if (confirmMenu == null)
+            {
+                continue;
+            }
+
+            _baseMenuActiveField ??= GetAllFields(confirmMenu.GetType())
+                .FirstOrDefault(candidate => string.Equals(candidate.Name, "ʿˁʲˁʴʸʿˁˁʹʸ", StringComparison.Ordinal));
+            object? activeValue = _baseMenuActiveField?.GetValue(confirmMenu);
+            if (activeValue is bool active && active)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private object? TryGetActiveSongSpeedMenuSetting(object menu)
+    {
+        object? directSongSpeedSetting = TryFindSongSpeedSettingInMenu(menu);
+        if (directSongSpeedSetting != null)
+        {
+            return directSongSpeedSetting;
+        }
+
+        object? selectedSongSpeedSetting = TryResolveSongSpeedSettingFromMenuSelection(menu);
+        if (selectedSongSpeedSetting != null)
+        {
+            return selectedSongSpeedSetting;
+        }
+
+        return null;
+    }
+
+    private object? TryFindSongSpeedSettingInMenu(object menu)
+    {
+        object? expectedSongSpeedSetting = _songSpeedSettingField?.GetValue(null);
+        foreach (FieldInfo field in GetAllFields(menu.GetType()))
+        {
+            if (!IsGameSettingType(field.FieldType))
+            {
+                continue;
+            }
+
+            object? setting = SafeGetFieldValue(field, menu);
+            if (setting == null)
+            {
+                continue;
+            }
+
+            if (expectedSongSpeedSetting != null && ReferenceEquals(setting, expectedSongSpeedSetting))
+            {
+                return setting;
+            }
+
+            if (IsSongSpeedSetting(setting))
+            {
+                return setting;
+            }
+        }
+
+        return null;
+    }
+
+    private object? TryResolveSongSpeedSettingFromMenuSelection(object menu)
+    {
+        object? activeOptionSetting = TryResolveSongSpeedSettingByOption(menu, TryGetActiveMenuOptionLabel(menu));
+        if (activeOptionSetting != null)
+        {
+            return activeOptionSetting;
+        }
+
+        return TryResolveSongSpeedSettingByOption(menu, TryGetSelectedMenuOptionLabel(menu));
+    }
+
+    private object? TryResolveSongSpeedSettingByOption(object menu, string? optionLabel)
+    {
+        if (string.IsNullOrWhiteSpace(optionLabel))
+        {
+            return null;
+        }
+
+        object? menuSetting = TryGetSettingFromMenuLookup(menu, optionLabel!);
+        if (IsSongSpeedSetting(menuSetting))
+        {
+            return menuSetting;
+        }
+
+        return IsSongSpeedOptionLabel(optionLabel) ? TryGetSongSpeedSetting() : null;
+    }
+
+    private static bool IsSongSpeedOptionLabel(string? optionLabel)
+    {
+        return string.Equals(optionLabel, "Song Speed", StringComparison.Ordinal)
+            || string.Equals(optionLabel, "song_speed", StringComparison.Ordinal);
+    }
+
+    private object? TryGetSongSpeedSetting()
+    {
+        try
+        {
+            _songSpeedSettingField ??= FindSongSpeedSettingField();
+            return _songSpeedSettingField?.GetValue(null);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool IsSongSpeedSetting(object? setting)
+    {
+        if (setting == null)
+        {
+            return false;
+        }
+
+        object? expectedSongSpeedSetting = TryGetSongSpeedSetting();
+        if (expectedSongSpeedSetting != null && ReferenceEquals(setting, expectedSongSpeedSetting))
+        {
+            return true;
+        }
+
+        return string.Equals(TryGetSettingName(setting), "song_speed", StringComparison.Ordinal);
+    }
+
+    private string? TryGetSettingName(object setting)
+    {
+        try
+        {
+            string? name = _gameSettingNameField?.GetValue(setting) as string;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+        catch
+        {
+        }
+
+        for (Type? type = setting.GetType(); type != null; type = type.BaseType)
+        {
+            FieldInfo? nameField = type.GetField("name", AnyInstance | BindingFlags.DeclaredOnly);
+            if (nameField == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                string? name = nameField.GetValue(setting) as string;
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    return name;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private string? TryGetActiveMenuOptionLabel(object menu)
+    {
+        FieldInfo? activeOptionField = GetBaseMenuActiveOptionField(menu);
+        return activeOptionField == null ? null : SafeGetFieldValue(activeOptionField, menu) as string;
+    }
+
+    private FieldInfo? GetBaseMenuActiveOptionField(object menu)
+    {
+        _baseMenuActiveOptionField ??= GetAllFields(menu.GetType())
+            .FirstOrDefault(field => field.FieldType == typeof(string) && string.Equals(field.Name, "ʾʺʲʻʺʳʲʲʶʿʳ", StringComparison.Ordinal));
+        return _baseMenuActiveOptionField;
+    }
+
+    private string? TryGetSelectedMenuOptionLabel(object menu)
+    {
+        _baseMenuSelectedOptionMethod ??= GetAllMethods(menu.GetType())
+            .FirstOrDefault(method =>
+                method.GetParameters().Length == 0 &&
+                method.ReturnType == typeof(string) &&
+                string.Equals(method.Name, "ʺʽʻʹʳˁʿʹˁʶʵ", StringComparison.Ordinal));
+        if (_baseMenuSelectedOptionMethod == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _baseMenuSelectedOptionMethod.Invoke(menu, null) as string;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private object? TryGetSettingFromMenuLookup(object menu, string optionLabel)
+    {
+        foreach (MethodInfo method in GetAllMethods(menu.GetType()))
+        {
+            ParameterInfo[] parameters = method.GetParameters();
+            if (parameters.Length != 1 ||
+                parameters[0].ParameterType != typeof(string) ||
+                !IsGameSettingType(method.ReturnType))
+            {
+                continue;
+            }
+
+            try
+            {
+                object? setting = method.Invoke(menu, new object[] { optionLabel });
+                if (setting != null)
+                {
+                    return setting;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private bool IsGameSettingType(Type type)
+    {
+        if (_gameSettingType != null && _gameSettingType.IsAssignableFrom(type))
+        {
+            return true;
+        }
+
+        for (Type? current = type; current != null; current = current.BaseType)
+        {
+            string? fullName = current.FullName;
+            if (string.Equals(fullName, "StrikeCore.GameSetting", StringComparison.Ordinal) ||
+                string.Equals(fullName, "StrikeCore.IntGameSetting", StringComparison.Ordinal) ||
+                (fullName?.StartsWith("StrikeCore.NumericGameSetting`1", StringComparison.Ordinal) ?? false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void EnsureSongSpeedMenuSettingActive(object menu, object setting)
+    {
+        try
+        {
+            FieldInfo? activeSettingField = GetAllFields(menu.GetType())
+                .FirstOrDefault(field => IsGameSettingType(field.FieldType));
+            activeSettingField?.SetValue(menu, setting);
+
+            string? activeOption = TryGetActiveMenuOptionLabel(menu);
+            if (!string.IsNullOrWhiteSpace(activeOption))
+            {
+                return;
+            }
+
+            string? selectedOption = TryGetSelectedMenuOptionLabel(menu);
+            if (!IsSongSpeedOptionLabel(selectedOption))
+            {
+                return;
+            }
+
+            FieldInfo? activeOptionField = GetBaseMenuActiveOptionField(menu);
+            activeOptionField?.SetValue(menu, "Song Speed");
+        }
+        catch
+        {
+        }
+    }
+
+    private bool TrySetSongSpeedIncrementAmount(object setting, int incrementAmount)
+    {
+        try
+        {
+            if (_songSpeedIncrementAmountField == null ||
+                !(_songSpeedIncrementAmountField.DeclaringType?.IsAssignableFrom(setting.GetType()) ?? false))
+            {
+                FieldInfo[] integerFields = GetAllFields(setting.GetType())
+                    .Where(field => field.FieldType == typeof(int))
+                    .ToArray();
+                _songSpeedIncrementAmountField = integerFields
+                    .FirstOrDefault(field => string.Equals(field.Name, "<IncrementAmount>k__BackingField", StringComparison.Ordinal))
+                    ?? integerFields.FirstOrDefault(field =>
+                        string.Equals(field.Name, "incrementAmount", StringComparison.Ordinal) &&
+                        string.Equals(field.DeclaringType?.FullName, "StrikeCore.IntGameSetting", StringComparison.Ordinal))
+                    ?? integerFields.FirstOrDefault(field => string.Equals(field.Name, "incrementAmount", StringComparison.Ordinal));
+            }
+
+            if (_songSpeedIncrementAmountField == null)
+            {
+                return false;
+            }
+
+            _songSpeedIncrementAmountField.SetValue(setting, incrementAmount);
+            return ConvertToInt32(_songSpeedIncrementAmountField.GetValue(setting)) == incrementAmount;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void LogFineSongSpeedAdjustFailure(object menu, object setting)
+    {
+        if (_fineSongSpeedAdjustFailureLogged)
+        {
+            return;
+        }
+
+        _fineSongSpeedAdjustFailureLogged = true;
+        StockTrackerLog.Write($"FineSongSpeedUnavailable | menu={menu.GetType().FullName} setting={setting.GetType().FullName} reason=adjust");
+    }
+
+    private static object? SafeGetFieldValue(FieldInfo field, object instance)
+    {
+        try
+        {
+            return field.GetValue(instance);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static PropertyInfo? GetNumericSettingProperty(object setting, string propertyName)
+    {
+        for (Type? type = setting.GetType(); type != null; type = type.BaseType)
+        {
+            PropertyInfo? property = type.GetProperty(propertyName, AnyInstance);
+            if (property != null)
+            {
+                return property;
+            }
+        }
+
+        return null;
+    }
+
+    private void RefreshSongSpeedMenu(object menu)
+    {
+        try
+        {
+            if (string.Equals(menu.GetType().Name, "SongOptions", StringComparison.Ordinal))
+            {
+                _songOptionsRefreshMethod ??= GetAllMethods(menu.GetType())
+                    .FirstOrDefault(method => method.GetParameters().Length == 0 && string.Equals(method.Name, "ʴʸˀʼˁˁʷʲʲʴʹ", StringComparison.Ordinal));
+                _songOptionsRefreshMethod?.Invoke(menu, null);
+                return;
+            }
+
+            _baseSettingMenuRefreshMethod ??= GetAllMethods(menu.GetType())
+                .FirstOrDefault(method => method.GetParameters().Length == 0 && string.Equals(method.Name, "ʺʻʵʶʳʽʺʼʲʻʵ", StringComparison.Ordinal));
+            _baseSettingMenuRefreshMethod?.Invoke(menu, null);
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write($"FineSongSpeedRefreshFailure | {ex.Message}");
+        }
     }
 
     private void EnsureReleaseCheckStarted()
@@ -1422,7 +1900,8 @@ internal sealed class V1StockTracker
                 return false;
             }
 
-            int currentValue = ConvertToInt32(_gameSettingCurrentValueProperty?.GetValue(setting, null));
+            PropertyInfo? currentValueProperty = GetNumericSettingProperty(setting, "CurrentValue");
+            int currentValue = ConvertToInt32(currentValueProperty?.GetValue(setting, null));
             return currentValue == AnimatedMenuBackgroundSettingValue;
         }
         catch
@@ -2416,6 +2895,10 @@ internal sealed class V1StockTracker
         {
             _config.Songs.TryGetValue(songConfigKey, out songConfig);
         }
+        if (songConfig != null)
+        {
+            NormalizeSongConfigDictionaries(songConfig);
+        }
 
         GUIStyle introStyle = new GUIStyle(GUI.skin.label);
         introStyle.normal.textColor = new Color(0.82f, 0.9f, 1f, 0.95f);
@@ -2435,9 +2918,9 @@ internal sealed class V1StockTracker
         float actionHeight = 28f;
         float gap = 8f;
         float headerInfoHeight = 42f;
-        float previewHeight = Mathf.Clamp(contentRect.height * 0.24f, 120f, 180f);
+        float previewHeight = Mathf.Clamp(contentRect.height * 0.22f, 120f, 170f);
         float upperY = actionHeight + gap + headerInfoHeight + gap;
-        float upperHeight = Mathf.Max(180f, contentRect.height - upperY - previewHeight - gap);
+        float upperHeight = Mathf.Max(430f, contentRect.height - upperY - previewHeight - gap);
         float listWidth = Mathf.Clamp(contentRect.width * 0.34f, 260f, 380f);
         float editorWidth = Mathf.Max(260f, contentRect.width - listWidth - gap);
 
@@ -2446,6 +2929,9 @@ internal sealed class V1StockTracker
         Rect listRect = new Rect(contentRect.x, contentRect.y + upperY, listWidth, upperHeight);
         Rect editorRect = new Rect(listRect.xMax + gap, listRect.y, editorWidth, upperHeight);
         Rect previewRect = new Rect(contentRect.x, listRect.yMax + gap, contentRect.width, previewHeight);
+        float amountHeight = Mathf.Clamp(editorRect.height * 0.36f, 190f, 220f);
+        Rect amountEditorRect = new Rect(editorRect.x, editorRect.y, editorRect.width, amountHeight);
+        Rect templateEditorRect = new Rect(editorRect.x, amountEditorRect.yMax + gap, editorRect.width, Mathf.Max(140f, editorRect.yMax - amountEditorRect.yMax - gap));
 
         if (GUI.Toggle(closeRect, false, new GUIContent("CLOSE"), GUI.skin.button))
         {
@@ -2476,7 +2962,8 @@ internal sealed class V1StockTracker
         }
 
         RenderSectionExportList(listRect, state, songConfig, sectionHeaderStyle, helpStyle);
-        RenderSectionExportAmountEditor(editorRect, state, song, songConfig, sectionHeaderStyle, helpStyle);
+        RenderSectionExportAmountEditor(amountEditorRect, state, song, songConfig, sectionHeaderStyle, helpStyle);
+        RenderSectionFcsPastTemplateEditor(templateEditorRect, state, song, songConfig, sectionHeaderStyle, helpStyle);
         RenderSectionExportPreview(previewRect, state, song, songConfig, sectionHeaderStyle, previewStyle);
     }
 
@@ -2632,6 +3119,206 @@ internal sealed class V1StockTracker
         GUI.Label(statusRect, statusText, helpStyle);
     }
 
+    private void RenderSectionFcsPastTemplateEditor(Rect editorRect, TrackerState state, SongDescriptor song, SongConfig songConfig, GUIStyle sectionHeaderStyle, GUIStyle helpStyle)
+    {
+        ExportTemplateDefinition? definition = ExportTemplateCatalog.TryGet("section.fcs_past");
+        if (definition == null)
+        {
+            GUI.Label(new Rect(editorRect.x + 10f, editorRect.y + 10f, editorRect.width - 20f, editorRect.height - 20f), "Section FCs Past template is unavailable.", helpStyle);
+            return;
+        }
+
+        string? selectedSectionKey = EnsureSelectedSectionExportKey(state);
+        Rect titleRect = new Rect(editorRect.x + 10f, editorRect.y + 8f, editorRect.width - 20f, 20f);
+        Rect helpRect = new Rect(editorRect.x + 10f, editorRect.y + 30f, editorRect.width - 20f, 34f);
+        Rect defaultLabelRect = new Rect(editorRect.x + 10f, editorRect.y + 72f, 120f, 20f);
+        Rect defaultRect = new Rect(editorRect.x + 136f, editorRect.y + 70f, Mathf.Max(120f, editorRect.width - 146f), 24f);
+        Rect overrideLabelRect = new Rect(editorRect.x + 10f, editorRect.y + 108f, 120f, 20f);
+        Rect textRect = new Rect(editorRect.x + 136f, editorRect.y + 106f, Mathf.Max(120f, editorRect.width - 146f), 24f);
+        Rect saveRect = new Rect(editorRect.x + 10f, editorRect.yMax - 38f, 84f, 28f);
+        Rect revertRect = new Rect(saveRect.xMax + 8f, saveRect.y, 84f, 28f);
+        Rect clearRect = new Rect(revertRect.xMax + 8f, saveRect.y, 84f, 28f);
+        Rect statusRect = new Rect(clearRect.xMax + 10f, saveRect.y + 3f, Mathf.Max(0f, editorRect.xMax - clearRect.xMax - 20f), 22f);
+
+        GUI.Label(titleRect, "FCs Past Template", sectionHeaderStyle);
+        GUI.Label(helpRect, "The first line is the locked global fallback. Add a section override only when that section needs different wording.", helpStyle);
+        GUI.Label(defaultLabelRect, "Global", helpStyle);
+        GUI.Box(defaultRect, new GUIContent(SectionFcsPastDefaultTemplate), GUI.skin.box);
+
+        if (string.IsNullOrWhiteSpace(selectedSectionKey))
+        {
+            GUI.Label(textRect, "Select a section.", helpStyle);
+            return;
+        }
+
+        string sectionKey = selectedSectionKey!;
+        string draftKey = BuildSectionFcsPastTemplateDraftKey(song.SongKey, sectionKey);
+        string draftText = GetSectionFcsPastTemplateOverrideDraft(draftKey, songConfig, sectionKey);
+        GUI.Label(overrideLabelRect, "Override", helpStyle);
+        string updatedDraftText = RenderSectionFcsPastTemplateOverrideField(textRect, draftKey, draftText);
+        if (!string.Equals(updatedDraftText, draftText, StringComparison.Ordinal))
+        {
+            _exportTemplateEditorDrafts[draftKey] = updatedDraftText;
+            draftText = updatedDraftText;
+        }
+
+        bool hasOverride = !string.IsNullOrWhiteSpace(draftText);
+        string? errorMessage = null;
+        int errorLineNumber = 0;
+        bool canSave = !hasOverride || ExportTemplateEngine.TryCompile(definition, draftText, out _, out errorMessage, out errorLineNumber);
+        GUI.enabled = canSave;
+        if (GUI.Toggle(saveRect, false, new GUIContent("SAVE"), GUI.skin.button))
+        {
+            SaveSectionFcsPastTemplateOverride(song, songConfig, sectionKey, draftKey, draftText);
+        }
+
+        GUI.enabled = true;
+        if (GUI.Toggle(revertRect, false, new GUIContent("REVERT"), GUI.skin.button))
+        {
+            _exportTemplateEditorDrafts.Remove(draftKey);
+        }
+
+        if (GUI.Toggle(clearRect, false, new GUIContent("CLEAR"), GUI.skin.button))
+        {
+            ClearSectionFcsPastTemplateOverride(song, songConfig, sectionKey, draftKey);
+        }
+
+        string statusText = !hasOverride
+            ? "No override saved; this section uses the global line."
+            : canSave
+                ? "Preview uses this override line."
+                : $"Line {errorLineNumber.ToString(CultureInfo.InvariantCulture)}: {errorMessage ?? "Invalid template"}";
+        GUI.Label(statusRect, statusText, helpStyle);
+    }
+
+    private string GetSectionFcsPastTemplateOverrideDraft(string draftKey, SongConfig songConfig, string sectionKey)
+    {
+        if (_exportTemplateEditorDrafts.TryGetValue(draftKey, out string? draftText))
+        {
+            return draftText ?? string.Empty;
+        }
+
+        NormalizeSongConfigDictionaries(songConfig);
+        return songConfig.SectionFcsPastTemplateOverrides.TryGetValue(sectionKey, out string? savedOverride)
+            ? savedOverride ?? string.Empty
+            : string.Empty;
+    }
+
+    private void SaveSectionFcsPastTemplateOverride(SongDescriptor song, SongConfig songConfig, string sectionKey, string draftKey, string draftText)
+    {
+        NormalizeSongConfigDictionaries(songConfig);
+        string normalizedDraft = draftText ?? string.Empty;
+        bool changed;
+        if (string.IsNullOrWhiteSpace(normalizedDraft))
+        {
+            changed = songConfig.SectionFcsPastTemplateOverrides.Remove(sectionKey);
+            normalizedDraft = string.Empty;
+        }
+        else
+        {
+            changed = !songConfig.SectionFcsPastTemplateOverrides.TryGetValue(sectionKey, out string? previous) ||
+                !string.Equals(previous, normalizedDraft, StringComparison.Ordinal);
+            songConfig.SectionFcsPastTemplateOverrides[sectionKey] = normalizedDraft;
+        }
+
+        _exportTemplateEditorDrafts.Remove(draftKey);
+        if (changed)
+        {
+            MarkConfigDirty(song.OverlayLayoutKey ?? song.SongKey, affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
+        }
+    }
+
+    private void ClearSectionFcsPastTemplateOverride(SongDescriptor song, SongConfig songConfig, string sectionKey, string draftKey)
+    {
+        NormalizeSongConfigDictionaries(songConfig);
+        bool removed = songConfig.SectionFcsPastTemplateOverrides.Remove(sectionKey);
+        _exportTemplateEditorDrafts[draftKey] = string.Empty;
+        if (removed)
+        {
+            MarkConfigDirty(song.OverlayLayoutKey ?? song.SongKey, affectsGlobalSnapshot: true, affectsExportTemplates: true);
+            RequestImmediateExportRefresh(includeStateExport: false, includeObsExport: true);
+        }
+    }
+
+    private string RenderSectionFcsPastTemplateOverrideField(Rect fieldRect, string draftKey, string currentValue)
+    {
+        string safeValue = currentValue ?? string.Empty;
+        bool selected = string.Equals(_exportTemplateEditorActiveTemplateId, draftKey, StringComparison.Ordinal);
+        Event? currentEvent = Event.current;
+
+        if (currentEvent != null &&
+            currentEvent.type == EventType.MouseDown &&
+            fieldRect.Contains(currentEvent.mousePosition))
+        {
+            _exportTemplateEditorActiveTemplateId = draftKey;
+            _exportTemplateEditorActiveLineIndex = 0;
+            _exportTemplateEditorCursorIndex = safeValue.Length;
+            currentEvent.Use();
+            selected = true;
+        }
+
+        GUI.Box(fieldRect, GUIContent.none, GUI.skin.box);
+        GUI.Label(new Rect(fieldRect.x + 4f, fieldRect.y + 1f, Mathf.Max(0f, fieldRect.width - 8f), fieldRect.height - 2f), selected ? BuildTemplateEditorDisplayLine(safeValue, _exportTemplateEditorCursorIndex) : safeValue, GUI.skin.textField);
+        if (!selected || currentEvent == null || currentEvent.type != EventType.KeyDown)
+        {
+            return safeValue;
+        }
+
+        int cursorIndex = Mathf.Clamp(_exportTemplateEditorCursorIndex, 0, safeValue.Length);
+        bool handled = false;
+        switch (currentEvent.keyCode)
+        {
+            case KeyCode.LeftArrow:
+                cursorIndex = Mathf.Max(0, cursorIndex - 1);
+                handled = true;
+                break;
+            case KeyCode.RightArrow:
+                cursorIndex = Mathf.Min(safeValue.Length, cursorIndex + 1);
+                handled = true;
+                break;
+            case KeyCode.Home:
+                cursorIndex = 0;
+                handled = true;
+                break;
+            case KeyCode.End:
+                cursorIndex = safeValue.Length;
+                handled = true;
+                break;
+            case KeyCode.Backspace:
+                if (cursorIndex > 0)
+                {
+                    safeValue = safeValue.Remove(cursorIndex - 1, 1);
+                    cursorIndex--;
+                }
+                handled = true;
+                break;
+            case KeyCode.Delete:
+                if (cursorIndex < safeValue.Length)
+                {
+                    safeValue = safeValue.Remove(cursorIndex, 1);
+                }
+                handled = true;
+                break;
+        }
+
+        if (!handled && !char.IsControl(currentEvent.character))
+        {
+            safeValue = safeValue.Insert(cursorIndex, currentEvent.character.ToString());
+            cursorIndex++;
+            handled = true;
+        }
+
+        if (!handled)
+        {
+            return safeValue;
+        }
+
+        _exportTemplateEditorCursorIndex = Mathf.Clamp(cursorIndex, 0, safeValue.Length);
+        currentEvent.Use();
+        return safeValue;
+    }
+
     private void RenderSectionExportPreview(Rect previewRect, TrackerState state, SongDescriptor song, SongConfig songConfig, GUIStyle sectionHeaderStyle, GUIStyle previewStyle)
     {
         Rect titleRect = new Rect(previewRect.x + 10f, previewRect.y + 8f, previewRect.width - 20f, 20f);
@@ -2660,10 +3347,43 @@ internal sealed class V1StockTracker
             ? parsedDraft
             : savedFcsPast;
 
-        string previewText =
-            BuildTrackedSectionExportText(sectionKey, Math.Max(0, previewFcsPast)) +
-            $"{Environment.NewLine}{Environment.NewLine}Enabled: {(IsTrackedSectionExportEnabled(songConfig, sectionKey) ? "Yes" : "No")}";
+        string previewText = BuildSectionFcsPastTemplatePreview(state, song, songConfig, sectionKey, Math.Max(0, previewFcsPast));
+        previewText += $"{Environment.NewLine}{Environment.NewLine}Enabled: {(IsTrackedSectionExportEnabled(songConfig, sectionKey) ? "Yes" : "No")}";
         GUI.Label(bodyRect, previewText, previewStyle);
+    }
+
+    private string BuildSectionFcsPastTemplatePreview(TrackerState state, SongDescriptor song, SongConfig songConfig, string sectionName, int fcsPast)
+    {
+        ExportTemplateDefinition? definition = ExportTemplateCatalog.TryGet("section.fcs_past");
+        if (definition == null)
+        {
+            return string.Empty;
+        }
+
+        SectionStatsState section = new()
+        {
+            Name = sectionName,
+            RunsPast = fcsPast,
+            Tracked = true
+        };
+        string source = GetSectionFcsPastTemplatePreviewSource(song, songConfig, sectionName);
+        if (!ExportTemplateEngine.TryCompile(definition, source, out CompiledExportTemplate? compiledTemplate, out string? errorMessage, out int errorLineNumber) ||
+            compiledTemplate == null)
+        {
+            return $"Template error on line {errorLineNumber.ToString(CultureInfo.InvariantCulture)}: {errorMessage ?? "Invalid template"}";
+        }
+
+        ExportTemplateRenderContext context = CreateSectionTemplateContext(state, section, sectionName, "FCs Past", fcsPast.ToString(CultureInfo.InvariantCulture));
+        return ExportTemplateEngine.Render(compiledTemplate, context);
+    }
+
+    private string GetSectionFcsPastTemplatePreviewSource(SongDescriptor song, SongConfig songConfig, string sectionKey)
+    {
+        string draftKey = BuildSectionFcsPastTemplateDraftKey(song.SongKey, sectionKey);
+        string overrideSource = GetSectionFcsPastTemplateOverrideDraft(draftKey, songConfig, sectionKey);
+        return string.IsNullOrWhiteSpace(overrideSource)
+            ? SectionFcsPastDefaultTemplate
+            : overrideSource;
     }
 
     private string? EnsureSelectedSectionExportKey(TrackerState state)
@@ -2707,6 +3427,11 @@ internal sealed class V1StockTracker
     private static string BuildSectionFcsPastDraftKey(string songKey, string sectionKey)
     {
         return $"{songKey}|{sectionKey}";
+    }
+
+    private static string BuildSectionFcsPastTemplateDraftKey(string songKey, string sectionKey)
+    {
+        return $"template|{songKey}|{sectionKey}";
     }
 
     private string RenderSectionFcsPastInputField(Rect fieldRect, string draftKey, string currentValue)
@@ -4673,6 +5398,13 @@ internal sealed class V1StockTracker
         return _config.ExportTemplateOverrides;
     }
 
+    private static void NormalizeSongConfigDictionaries(SongConfig songConfig)
+    {
+        songConfig.TrackedSections ??= new Dictionary<string, bool>(StringComparer.Ordinal);
+        songConfig.SectionFcsPastTemplateOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        songConfig.OverlayWidgets ??= new Dictionary<string, OverlayWidgetConfig>(StringComparer.Ordinal);
+    }
+
     private void NormalizeLoadedExportTemplateOverrides()
     {
         Dictionary<string, string> normalized = new(StringComparer.Ordinal);
@@ -4680,7 +5412,8 @@ internal sealed class V1StockTracker
         {
             foreach (KeyValuePair<string, string> pair in _config.ExportTemplateOverrides)
             {
-                if (string.IsNullOrWhiteSpace(pair.Key))
+                if (string.IsNullOrWhiteSpace(pair.Key) ||
+                    string.Equals(pair.Key, SectionFcsPastTemplateId, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -5694,6 +6427,7 @@ internal sealed class V1StockTracker
         _memoryPath = Path.Combine(_dataDir, "memory.json");
         _configPath = Path.Combine(_dataDir, "config.json");
         _desktopStylePath = Path.Combine(_dataDir, "desktop-style.json");
+        _noteSplitCommandsDir = Path.Combine(_dataDir, "notesplit-commands");
         _obsDir = Path.Combine(_dataDir, "obs");
         _obsStatePath = Path.Combine(_obsDir, "state.json");
         Directory.CreateDirectory(_dataDir);
@@ -5748,7 +6482,6 @@ internal sealed class V1StockTracker
             ?? _gameManagerType.GetFields(AnyInstance).FirstOrDefault(IsChartLikeField);
 
         _controllerField ??= _basePlayerType.GetField(BasePlayerControllerFieldName, AnyInstance);
-        _scoreField ??= _basePlayerType.GetField(BasePlayerScoreFieldName, AnyInstance);
         _comboField ??= _basePlayerType.GetField(BasePlayerComboFieldName, AnyInstance);
         _ghostNotesField ??= _basePlayerType.GetField("Ê²Ë€ÊµÊ»Ê¿Ê´Ê¹ÊµÊ¿Ê¼Ê»", AnyInstance);
         _overstrumsField ??= _basePlayerType.GetField("Ê·Ê¸Ê½Ë€Ê¾Ê»Ê¹Ê·ÊºË€Ê½", AnyInstance);
@@ -5761,7 +6494,6 @@ internal sealed class V1StockTracker
             ?? _globalVariablesType?.GetFields(AnyInstance).FirstOrDefault(field => string.Equals(field.FieldType.Name, "SongEntry", StringComparison.Ordinal));
         _globalVariablesSongSpeedField ??= _globalVariablesType?.GetField("ʹʷʾʿʴˁʼʲʼʸʴ", AnyInstance);
         _gameSettingNameField ??= _gameSettingType?.GetField("name", AnyInstance);
-        _gameSettingCurrentValueProperty ??= _gameSettingType?.GetProperty("CurrentValue", AnyInstance);
         _gameSettingPercentStringProperty ??= _gameSettingType?.GetProperty("GetPercentString", AnyInstance);
         _songSpeedSettingField ??= FindSongSpeedSettingField();
         _menuBackgroundSettingField ??= FindMenuBackgroundSettingField();
@@ -5856,7 +6588,6 @@ internal sealed class V1StockTracker
 
         return new TrackingRequirements
         {
-            NeedScore = false,
             NeedStreak = needBestStreakTracking ||
                 IsTextExportEnabled(enabledTextExports, "streak"),
             NeedGhostNotes = needLifetimeGhostTracking ||
@@ -5865,6 +6596,7 @@ internal sealed class V1StockTracker
                 needSongBestRunTracking ||
                 needFcAchievedTracking ||
                 IsTextExportEnabled(enabledTextExports, "current_overstrums"),
+            NeedCurrentOverstrumsExport = IsTextExportEnabled(enabledTextExports, "current_overstrums"),
             NeedMissedNotes = needSectionExports ||
                 needSongBestRunTracking ||
                 needFcAchievedTracking ||
@@ -5917,18 +6649,74 @@ internal sealed class V1StockTracker
     {
         TrackerState preservedState = _latestState ?? CreateIdleState();
         preservedState.OverlayEditorVisible = _overlayEditorVisible;
+        TryFinalizeCompletedRunFromResultStats(preservedState);
         return preservedState;
     }
 
-    private static bool LooksLikeActualRestart(double songTime, int score, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes)
+    private void TryFinalizeCompletedRunFromResultStats(TrackerState state)
+    {
+        if (!_runState.InRun ||
+            _runState.CompletedRunRecorded ||
+            _runState.IsPracticeRun ||
+            !IsTextExportEnabled(GetEnabledTextExportsSnapshot(), "completed_runs"))
+        {
+            return;
+        }
+
+        SongMemory? songMemory = _runState.CachedSongMemory;
+        if (songMemory == null ||
+            _runState.CachedSongDuration <= 1d ||
+            _runState.LastSongTime < _runState.CachedSongDuration - 0.35d)
+        {
+            return;
+        }
+
+        PlayerStatsSnapshot? resultStats = TryReadResultStats();
+        if (resultStats == null)
+        {
+            return;
+        }
+
+        _runState.CachedResultStats = resultStats;
+        _runState.LastResultStatsRefreshAt = Time.unscaledTime;
+        _runState.HasCachedResultStats = true;
+
+        bool fcThisRun =
+            !_runState.HadMiss &&
+            _runState.LastMissedNotes == 0 &&
+            _runState.LastOverstrums == 0;
+        int endStreak = ReadFreshStreakSnapshot(_runState.CachedPlayer, _runState.LastStreak);
+        _runState.LastStreak = endStreak;
+        if (endStreak > _runState.BestStreakThisRun)
+        {
+            _runState.BestStreakThisRun = endStreak;
+        }
+
+        if (TryRecordCompletedRun(
+            songMemory,
+            _runState.LastSection,
+            resultStats,
+            _runState.CachedNotesHit,
+            _runState.LastGhostNotes,
+            _runState.LastOverstrums,
+            _runState.LastMissedNotes,
+            fcThisRun))
+        {
+            state.Score = resultStats.Score;
+            state.Streak = endStreak;
+            state.CompletedRuns = GetOrBuildCompletedRunsSnapshot(_runState.SongKey, songMemory);
+            SaveMemory(deferIfInSong: true);
+        }
+    }
+
+    private static bool LooksLikeActualRestart(double songTime, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes)
     {
         if (songTime > 2.0d)
         {
             return false;
         }
 
-        return score <= 0 &&
-            streak <= 0 &&
+        return streak <= 0 &&
             currentGhostNotes <= 0 &&
             currentOverstrums <= 0 &&
             currentMissedNotes <= 0;
@@ -5938,6 +6726,59 @@ internal sealed class V1StockTracker
     {
         return currentSongTime <= 2.0d &&
             previousSongTime >= currentSongTime + 2.0d;
+    }
+
+    private static bool ShouldRefreshCachedMetric(bool forceFresh, bool hasCachedValue, float lastRefreshAt)
+    {
+        return forceFresh ||
+            !hasCachedValue ||
+            Time.unscaledTime - lastRefreshAt >= OptionalRunMetricReadIntervalSeconds;
+    }
+
+    private int ReadCachedStreak(object player, bool forceFresh)
+    {
+        if (ShouldRefreshCachedMetric(forceFresh, _runState.HasCachedStreak, _runState.LastStreakRefreshAt))
+        {
+            _runState.CachedStreak = ConvertToInt32(_comboField?.GetValue(player));
+            _runState.LastStreakRefreshAt = Time.unscaledTime;
+            _runState.HasCachedStreak = true;
+        }
+
+        return _runState.CachedStreak;
+    }
+
+    private int ReadFreshStreakSnapshot(object? player, int fallback)
+    {
+        if (player == null || _comboField == null)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            int streak = Math.Max(0, ConvertToInt32(_comboField.GetValue(player)));
+            _runState.CachedStreak = streak;
+            _runState.LastStreakRefreshAt = Time.unscaledTime;
+            _runState.HasCachedStreak = true;
+            return streak;
+        }
+        catch (Exception ex)
+        {
+            StockTrackerLog.Write($"StreakSnapshotReadFailure | {ex.Message}");
+            return fallback;
+        }
+    }
+
+    private int ReadCachedOverstrums(object player, bool forceFresh)
+    {
+        if (ShouldRefreshCachedMetric(forceFresh, _runState.HasCachedOverstrums, _runState.LastOverstrumsRefreshAt))
+        {
+            _runState.CachedOverstrums = ConvertToInt32(_overstrumsField?.GetValue(player));
+            _runState.LastOverstrumsRefreshAt = Time.unscaledTime;
+            _runState.HasCachedOverstrums = true;
+        }
+
+        return _runState.CachedOverstrums;
     }
 
     private TrackerState BuildState(object gameManager)
@@ -6016,6 +6857,7 @@ internal sealed class V1StockTracker
         bool isPractice = IsPracticeMode(gameManager);
         if (isPractice)
         {
+            bool noteSplitEnabledForPractice = IsTextExportEnabled(GetEnabledTextExportsSnapshot(), NoteSplitModeExportKey);
             if (!_practiceAttemptRollbackApplied)
             {
                 SongMemory? practiceSongMemory = _runState.CachedSongMemory;
@@ -6035,11 +6877,17 @@ internal sealed class V1StockTracker
                 _practiceAttemptRollbackApplied = true;
             }
 
-            ResetExactMissCounter(player);
-            ResetRunIfNeeded();
-            return CreateIdleState();
+            if (!noteSplitEnabledForPractice)
+            {
+                ResetExactMissCounter(player);
+                ResetRunIfNeeded();
+                return CreateIdleState();
+            }
         }
-        _practiceAttemptRollbackApplied = false;
+        else
+        {
+            _practiceAttemptRollbackApplied = false;
+        }
         SongDescriptor song;
         if (canUseStableRunCache && _runState.CachedSongDescriptor != null)
         {
@@ -6074,13 +6922,23 @@ internal sealed class V1StockTracker
 
         TrackingRequirements requirements = BuildTrackingRequirements(songConfig);
         bool isNearSongEnd = songDuration > 1d && songTime >= songDuration - 1.5d;
-        bool shouldReadFinalCompletedRunStats = requirements.NeedCompletedRunTracking && isNearSongEnd;
+        bool isAtSongEnd = songDuration > 1d && (songTime >= songDuration - 0.35d || songTime > songDuration);
+        bool isResultStatsSnapshotPoint = songDuration > 1d && songTime >= songDuration;
+        bool shouldReadFinalCompletedRunStats = requirements.NeedCompletedRunTracking && isAtSongEnd;
+        bool shouldReadCompletedRunEndStreak = requirements.NeedCompletedRunTracking && isResultStatsSnapshotPoint;
         CachePlayerStatsFields(player, requirements.NeedNotesHit && isNearSongEnd);
-        int score = requirements.NeedScore || requirements.NeedRunTracking || shouldReadFinalCompletedRunStats
-            ? ConvertToInt32(_scoreField?.GetValue(player))
-            : 0;
-        int streak = requirements.NeedStreak || requirements.NeedRunTracking || shouldReadFinalCompletedRunStats
-            ? ConvertToInt32(_comboField?.GetValue(player))
+        bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
+        bool songTimeWentBackwards = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        bool forceFreshRunMetricReads =
+            newSong ||
+            !_runState.InRun ||
+            songTime <= 2.0d ||
+            songTimeWentBackwards ||
+            shouldReadFinalCompletedRunStats;
+        int score = 0;
+        bool readStreak = requirements.NeedStreak || shouldReadCompletedRunEndStreak;
+        int streak = readStreak
+            ? ReadCachedStreak(player, forceFreshRunMetricReads || requirements.NeedStreak || shouldReadCompletedRunEndStreak)
             : 0;
         int currentGhostNotes = _runState.LastGhostNotes;
         if (requirements.NeedGhostNotes || shouldReadFinalCompletedRunStats)
@@ -6090,8 +6948,14 @@ internal sealed class V1StockTracker
             currentGhostNotes = Math.Max(currentGhostNotes, ConvertToInt32(_fretsBetweenNotesField?.GetValue(player)));
         }
 
+        bool forceFreshOverstrums =
+            forceFreshRunMetricReads ||
+            requirements.NeedCurrentOverstrumsExport ||
+            requirements.NeedSectionFcsPastTracking ||
+            requirements.NeedFcAchievedTracking ||
+            (requirements.NeedSongBestRunTracking && isNearSongEnd);
         int currentOverstrums = requirements.NeedOverstrums || requirements.NeedRunTracking || shouldReadFinalCompletedRunStats
-            ? ConvertToInt32(_overstrumsField?.GetValue(player))
+            ? ReadCachedOverstrums(player, forceFreshOverstrums)
             : 0;
         bool shouldRefreshNotesHit = requirements.NeedNotesHit &&
             isNearSongEnd &&
@@ -6112,10 +6976,9 @@ internal sealed class V1StockTracker
             ? ReadExactMissedNotesCount(player)
             : 0;
         int restartGhostNotes = requirements.NeedGhostNotes || shouldReadFinalCompletedRunStats ? currentGhostNotes : 0;
-        bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
-        bool songTimeWentBackwards = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        int restartStreak = readStreak ? streak : 0;
         bool restarted = songTimeWentBackwards &&
-            (LooksLikeActualRestart(songTime, score, streak, restartGhostNotes, currentOverstrums, currentMissedNotes) ||
+            (LooksLikeActualRestart(songTime, restartStreak, restartGhostNotes, currentOverstrums, currentMissedNotes) ||
              LooksLikeReturnToSongStart(_runState.LastSongTime, songTime));
         if ((newSong || restarted || !_runState.InRun) && (requirements.NeedRunTracking || requirements.NeedCompletedRunTracking || requirements.NeedMissedNotes))
         {
@@ -6127,12 +6990,12 @@ internal sealed class V1StockTracker
         }
 
         bool shouldReadResultStats = requirements.NeedResultStats &&
-            isNearSongEnd &&
+            isResultStatsSnapshotPoint &&
             (!_runState.HasCachedResultStats ||
              Time.unscaledTime - _runState.LastResultStatsRefreshAt >= ResultStatsRefreshIntervalSeconds);
         PlayerStatsSnapshot? resultStats = shouldReadResultStats
-            ? TryReadResultStats(score)
-            : (requirements.NeedResultStats && isNearSongEnd ? _runState.CachedResultStats : null);
+            ? TryReadResultStats()
+            : (requirements.NeedResultStats && isResultStatsSnapshotPoint ? _runState.CachedResultStats : null);
         if (shouldReadResultStats)
         {
             _runState.CachedResultStats = resultStats;
@@ -6141,7 +7004,7 @@ internal sealed class V1StockTracker
         }
         if (resultStats != null)
         {
-            score = Math.Max(score, resultStats.Score);
+            score = resultStats.Score;
             if (requirements.NeedGhostNotes || shouldReadFinalCompletedRunStats)
             {
                 MaybeCalibrateGhostNotesField(player, resultStats.GhostNotes);
@@ -6205,7 +7068,7 @@ internal sealed class V1StockTracker
 
         if (requirements.NeedRunTracking || requirements.NeedCompletedRunTracking)
         {
-            UpdateRunTracking(song, songMemory, songConfig, currentSectionName, songTime, songDuration, score, streak, currentGhostNotes, currentOverstrums, currentMissedNotes, currentNotesHit, resultStats, isPractice, requirements);
+            UpdateRunTracking(song, songMemory, songConfig, currentSectionName, songTime, songDuration, streak, readStreak, currentGhostNotes, currentOverstrums, currentMissedNotes, currentNotesHit, resultStats, isPractice, requirements);
             SaveMemory(deferIfInSong: true);
         }
         else
@@ -6318,7 +7181,6 @@ internal sealed class V1StockTracker
 
         bool notesHitLookupDone = string.Equals(_playerTypeCachedForNotesHitLookup, typeName, StringComparison.Ordinal);
         if (string.Equals(_playerTypeCachedForStats, typeName, StringComparison.Ordinal) &&
-            _scoreField != null &&
             _comboField != null &&
             _ghostNotesField != null &&
             _overstrumsField != null &&
@@ -6328,9 +7190,6 @@ internal sealed class V1StockTracker
         }
         // In v1, different instruments/players can be subclasses of BasePlayer with the obfuscated stat fields.
         // Resolve these against the runtime type so we don't get stuck reading null/0 forever.
-        FieldInfo? score = FindField(playerType,
-            BasePlayerScoreFieldName,
-            "\u00ca\u00bc\u00ca\u00bc\u00cb\u0081\u00ca\u00b4\u00ca\u00bf\u00ca\u00b8\u00ca\u00bf\u00ca\u00b2\u00ca\u00ba\u00ca\u00b3\u00ca\u00b5");
         FieldInfo? combo = FindField(playerType,
             "\u00ca\u00b2\u00ca\u00ba\u00ca\u00ba\u00ca\u00bf\u00ca\u00b3\u00ca\u00b2\u00ca\u00be\u00ca\u00b2\u00ca\u00bd\u00ca\u00bc\u00ca\u00bf",
             BasePlayerComboFieldName);
@@ -6350,7 +7209,6 @@ internal sealed class V1StockTracker
             "ʳʵˁʷˁˁʺʲʵʽʷ");
         PropertyInfo? ghostInputs = FindProperty(playerType,
             "\u02bb\u02bd\u02b5\u02b2\u02bf\u02b8\u02c1\u02b3\u02b4\u02b3\u02b7");
-        if (score != null) _scoreField = score;
         if (combo != null) _comboField = combo;
         if (ghosts != null) _ghostNotesField = ghosts;
         if (fretsBetweenNotes != null) _fretsBetweenNotesField = fretsBetweenNotes;
@@ -6361,7 +7219,6 @@ internal sealed class V1StockTracker
         _playerTypeCachedForStats = typeName;
         StockTrackerLog.WriteDebug(
             "PlayerStatsFields | type=" + typeName +
-            " | score=" + (_scoreField?.Name ?? "<null>") +
             " | combo=" + (_comboField?.Name ?? "<null>") +
             " | ghosts=" + (_ghostNotesField?.Name ?? "<null>") +
             " | fretsBetweenNotes=" + (_fretsBetweenNotesField?.Name ?? "<null>") +
@@ -6396,8 +7253,7 @@ internal sealed class V1StockTracker
         FindOrCreateExactMissCounter(player).MissedNotes++;
         if (features.NoteSplitEnabled && _noteSplitModeActive)
         {
-            MarkDesktopStateDirty();
-            RecordNoteSplitExactMiss(note);
+            RecordPendingNoteSplitExactMiss();
         }
     }
 
@@ -6448,23 +7304,14 @@ internal sealed class V1StockTracker
         return created;
     }
 
-    private void RecordNoteSplitExactMiss(object note)
+    private void RecordPendingNoteSplitExactMiss()
     {
         if (!_runState.InRun || !_noteSplitModeActive)
         {
             return;
         }
 
-        if (!TryResolveSectionNameForNoteSplitEvent(note, out string sectionName))
-        {
-            _runState.PendingNoteSplitMisses++;
-            _noteSplitRunVersion++;
-            MarkDesktopStateDirty();
-            return;
-        }
-
-        ApplyPendingNoteSplitMisses(sectionName);
-        AddNoteSplitMissToSection(sectionName, 1);
+        _runState.PendingNoteSplitMisses++;
     }
 
     private bool TryResolveSectionNameForNoteSplitEvent(object? note, out string sectionName)
@@ -6810,13 +7657,8 @@ internal sealed class V1StockTracker
         return null;
     }
 
-    private PlayerStatsSnapshot? TryReadResultStats(int score)
+    private PlayerStatsSnapshot? TryReadResultStats()
     {
-        if (score <= 0)
-        {
-            return null;
-        }
-
         CacheResultStatsReflection();
         if (_resultStatsArrayProperty == null || _playerStatsType == null)
         {
@@ -6855,12 +7697,6 @@ internal sealed class V1StockTracker
                     Accuracy = ConvertToInt32(_playerStatsAccuracyProperty == null ? null : SafeGetPropertyValue(_playerStatsAccuracyProperty, entry)),
                     AccuracyString = _playerStatsAccuracyStringProperty == null ? null : SafeGetPropertyValue(_playerStatsAccuracyStringProperty, entry) as string
                 };
-
-                if (candidateScore == score)
-                {
-                    return snapshot;
-                }
-
                 candidates.Add(snapshot);
             }
 
@@ -6872,24 +7708,6 @@ internal sealed class V1StockTracker
             if (candidates.Count == 1)
             {
                 return candidates[0];
-            }
-
-            if (score > 0)
-            {
-                PlayerStatsSnapshot best = candidates[0];
-                int bestDiff = Math.Abs(best.Score - score);
-                for (int i = 1; i < candidates.Count; i++)
-                {
-                    PlayerStatsSnapshot candidate = candidates[i];
-                    int diff = Math.Abs(candidate.Score - score);
-                    if (diff < bestDiff || (diff == bestDiff && candidate.TotalNotes > best.TotalNotes))
-                    {
-                        best = candidate;
-                        bestDiff = diff;
-                    }
-                }
-
-                return best;
             }
 
             PlayerStatsSnapshot bestNoScore = candidates[0];
@@ -7086,7 +7904,7 @@ internal sealed class V1StockTracker
             List<FieldInfo> matches = new();
             foreach (FieldInfo field in GetAllFields(_basePlayerType))
             {
-                if (field.FieldType != typeof(int))
+                if (field.FieldType != typeof(int) || IsKnownBasePlayerScoreField(field))
                 {
                     continue;
                 }
@@ -7104,7 +7922,6 @@ internal sealed class V1StockTracker
             }
 
             FieldInfo? selected = matches.FirstOrDefault(field =>
-                field != _scoreField &&
                 field != _comboField &&
                 field != _overstrumsField);
 
@@ -9362,7 +10179,8 @@ internal sealed class V1StockTracker
                 };
             }
 
-            int percent = ConvertToInt32(_gameSettingCurrentValueProperty?.GetValue(setting, null));
+            PropertyInfo? currentValueProperty = GetNumericSettingProperty(setting, "CurrentValue");
+            int percent = ConvertToInt32(currentValueProperty?.GetValue(setting, null));
             if (globalSongSpeed > 0)
             {
                 percent = globalSongSpeed;
@@ -9394,7 +10212,7 @@ internal sealed class V1StockTracker
 
     private FieldInfo? FindSongSpeedSettingField()
     {
-        if (_gameManagerType?.Assembly == null || _gameSettingType == null || _gameSettingNameField == null)
+        if (_gameManagerType?.Assembly == null)
         {
             return null;
         }
@@ -9405,7 +10223,7 @@ internal sealed class V1StockTracker
             {
                 foreach (FieldInfo field in type.GetFields(AnyStatic))
                 {
-                    if (field.FieldType != _gameSettingType)
+                    if (!IsGameSettingType(field.FieldType))
                     {
                         continue;
                     }
@@ -9424,7 +10242,7 @@ internal sealed class V1StockTracker
                         continue;
                     }
 
-                    string? settingName = _gameSettingNameField.GetValue(value) as string;
+                    string? settingName = TryGetSettingName(value);
                     if (string.Equals(settingName, "song_speed", StringComparison.Ordinal))
                     {
                         StockTrackerLog.WriteDebug($"SongSpeedSettingResolved | type={type.FullName} field={field.Name}");
@@ -9443,7 +10261,7 @@ internal sealed class V1StockTracker
 
     private FieldInfo? FindMenuBackgroundSettingField()
     {
-        if (_gameManagerType?.Assembly == null || _gameSettingType == null || _gameSettingNameField == null)
+        if (_gameManagerType?.Assembly == null)
         {
             return null;
         }
@@ -9454,7 +10272,7 @@ internal sealed class V1StockTracker
             {
                 foreach (FieldInfo field in type.GetFields(AnyStatic))
                 {
-                    if (field.FieldType != _gameSettingType)
+                    if (!IsGameSettingType(field.FieldType))
                     {
                         continue;
                     }
@@ -9473,7 +10291,7 @@ internal sealed class V1StockTracker
                         continue;
                     }
 
-                    string? settingName = _gameSettingNameField.GetValue(value) as string;
+                    string? settingName = TryGetSettingName(value);
                     if (string.Equals(settingName, MenuBackgroundSettingName, StringComparison.Ordinal))
                     {
                         return field;
@@ -9546,6 +10364,7 @@ internal sealed class V1StockTracker
             _config.Songs[configKey] = songConfig;
             MarkConfigDirty(songKey: configKey);
         }
+        NormalizeSongConfigDictionaries(songConfig);
 
         if (!string.Equals(songConfig.Title, song.Title, StringComparison.Ordinal))
         {
@@ -9584,7 +10403,9 @@ internal sealed class V1StockTracker
 
     private void ResetSongOverlay(SongConfig songConfig)
     {
+        NormalizeSongConfigDictionaries(songConfig);
         songConfig.TrackedSections.Clear();
+        songConfig.SectionFcsPastTemplateOverrides.Clear();
         songConfig.OverlayWidgets.Clear();
         _overlayColorTargetKey = null;
         _sectionSnapshotCache = null;
@@ -9630,6 +10451,12 @@ internal sealed class V1StockTracker
                 CachedSongMemoryKey = _runState.CachedSongMemoryKey,
                 CachedSongConfig = _runState.CachedSongConfig,
                 CachedSongConfigKey = _runState.CachedSongConfigKey,
+                CachedStreak = _runState.CachedStreak,
+                LastStreakRefreshAt = _runState.LastStreakRefreshAt,
+                HasCachedStreak = _runState.HasCachedStreak,
+                CachedOverstrums = _runState.CachedOverstrums,
+                LastOverstrumsRefreshAt = _runState.LastOverstrumsRefreshAt,
+                HasCachedOverstrums = _runState.HasCachedOverstrums,
                 CachedNotesHit = _runState.CachedNotesHit,
                 LastNotesHitRefreshAt = _runState.LastNotesHitRefreshAt,
                 HasCachedNotesHit = _runState.HasCachedNotesHit,
@@ -9725,6 +10552,7 @@ internal sealed class V1StockTracker
         DeleteIfExists(Path.Combine(_dataDir, "desktop-overlay.log"));
         DeleteIfExists(_obsStatePath);
         DeleteDirectoryIfExists(_obsDir);
+        DeleteDirectoryIfExists(_noteSplitCommandsDir);
 
         _memoryDirty = true;
         _configDirty = true;
@@ -9751,7 +10579,47 @@ internal sealed class V1StockTracker
         }
     }
 
-    private void UpdateRunTracking(SongDescriptor song, SongMemory songMemory, SongConfig songConfig, string currentSectionName, double songTime, double songDuration, int score, int streak, int currentGhostNotes, int currentOverstrums, int currentMissedNotes, int currentNotesHit, PlayerStatsSnapshot? resultStats, bool isPractice, TrackingRequirements requirements)
+    private bool TryRecordCompletedRun(
+        SongMemory songMemory,
+        string finalSectionName,
+        PlayerStatsSnapshot resultStats,
+        int currentNotesHit,
+        int currentGhostNotes,
+        int currentOverstrums,
+        int currentMissedNotes,
+        bool fcThisRun)
+    {
+        if (_runState.CompletedRunRecorded)
+        {
+            return false;
+        }
+
+        if (_runState.FirstMissStreak <= 0)
+        {
+            _runState.FirstMissStreak = Math.Max(_runState.BestStreakThisRun, _runState.LastStreak);
+        }
+
+        int percent = CalculateRunPercent(resultStats, currentNotesHit, currentMissedNotes, currentOverstrums, fcThisRun);
+        songMemory.CompletedRuns.Add(new CompletedRunRecord
+        {
+            Index = songMemory.CompletedRuns.Count + 1,
+            CompletedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            Score = resultStats.Score,
+            BestStreak = _runState.BestStreakThisRun,
+            FirstMissStreak = _runState.FirstMissStreak,
+            GhostedNotes = currentGhostNotes,
+            Overstrums = currentOverstrums,
+            MissedNotes = currentMissedNotes,
+            Percent = percent,
+            FcAchieved = fcThisRun,
+            FinalSection = finalSectionName
+        });
+        _runState.CompletedRunRecorded = true;
+        MarkMemoryDirty(affectsSectionSnapshots: false, affectsNoteSplitSnapshots: false);
+        return true;
+    }
+
+    private void UpdateRunTracking(SongDescriptor song, SongMemory songMemory, SongConfig songConfig, string currentSectionName, double songTime, double songDuration, int streak, bool streakRead, int currentGhostNotes, int currentOverstrums, int currentMissedNotes, int currentNotesHit, PlayerStatsSnapshot? resultStats, bool isPractice, TrackingRequirements requirements)
     {
         bool trackAttempts = requirements.NeedAttemptTracking;
         bool trackSectionFcsPast = requirements.NeedSectionFcsPastTracking;
@@ -9763,8 +10631,9 @@ internal sealed class V1StockTracker
         bool exportAttemptsToObs = requirements.NeedAttemptTextExport;
         bool newSong = !string.Equals(_runState.SongKey, song.SongKey, StringComparison.Ordinal);
         bool songTimeWentBackwards = _runState.SongKey == song.SongKey && songTime + 1.0 < _runState.LastSongTime;
+        int restartStreak = streakRead ? streak : 0;
         bool restarted = songTimeWentBackwards &&
-            (LooksLikeActualRestart(songTime, score, streak, currentGhostNotes, currentOverstrums, currentMissedNotes) ||
+            (LooksLikeActualRestart(songTime, restartStreak, currentGhostNotes, currentOverstrums, currentMissedNotes) ||
              LooksLikeReturnToSongStart(_runState.LastSongTime, songTime));
         bool startedFromSongSelect = !restarted &&
             !newSong &&
@@ -9776,7 +10645,7 @@ internal sealed class V1StockTracker
         bool noteSplitEnabled = IsTextExportEnabled(GetEnabledTextExportsSnapshot(), NoteSplitModeExportKey);
         if (newRun && noteSplitEnabled && _runState.InRun && !newSong && !isPractice)
         {
-            SnapshotNoteSplitPreviousValidRun(songMemory);
+            TrySnapshotNoteSplitPreviousValidRun(songMemory);
         }
         if (newRun)
         {
@@ -9798,18 +10667,25 @@ internal sealed class V1StockTracker
                 CachedSongMemoryKey = song.SongKey,
                 CachedSongConfig = songConfig,
                 CachedSongConfigKey = song.SongKey,
+                CachedStreak = streakRead ? streak : 0,
+                LastStreakRefreshAt = streakRead ? Time.unscaledTime : 0f,
+                HasCachedStreak = streakRead,
+                CachedOverstrums = currentOverstrums,
+                LastOverstrumsRefreshAt = Time.unscaledTime,
+                HasCachedOverstrums = true,
                 CachedNotesHit = currentNotesHit,
                 LastNotesHitRefreshAt = Time.unscaledTime,
                 HasCachedNotesHit = true,
                 LastSection = currentSectionName,
                 LastSongTime = songTime,
-                LastStreak = streak,
+                LastStreak = streakRead ? streak : 0,
                 LastGhostNotes = currentGhostNotes,
                 LastOverstrums = currentOverstrums,
                 LastMissedNotes = currentMissedNotes,
                 MissedNotesBaseline = _runState.MissedNotesBaseline,
+                IsPracticeRun = isPractice,
                 HadMiss = false,
-                BestStreakThisRun = streak,
+                BestStreakThisRun = streakRead ? streak : 0,
                 FirstMissStreak = 0,
                 CachedResultStats = null,
                 LastResultStatsRefreshAt = 0f,
@@ -9857,7 +10733,7 @@ internal sealed class V1StockTracker
                 }
                 _runState.HadMiss = true;
             }
-            if (!_runState.HadMiss && _runState.LastStreak > 0 && streak < _runState.LastStreak)
+            if (streakRead && !_runState.HadMiss && _runState.LastStreak > 0 && streak < _runState.LastStreak)
             {
                 if (_runState.FirstMissStreak <= 0)
                 {
@@ -9875,17 +10751,21 @@ internal sealed class V1StockTracker
         }
         _runState.InRun = true;
         _runState.SongKey = song.SongKey;
+        _runState.IsPracticeRun = isPractice;
         _runState.LastSection = currentSectionName;
         _runState.LastSongTime = songTime;
-        _runState.LastStreak = streak;
+        if (streakRead)
+        {
+            _runState.LastStreak = streak;
+        }
         _runState.LastGhostNotes = currentGhostNotes;
         _runState.LastOverstrums = currentOverstrums;
         _runState.LastMissedNotes = currentMissedNotes;
-        if (streak > _runState.BestStreakThisRun)
+        if (streakRead && streak > _runState.BestStreakThisRun)
         {
             _runState.BestStreakThisRun = streak;
         }
-        if (trackBestStreak && !isPractice && !_runState.HadMiss && streak > songMemory.BestStreak)
+        if (streakRead && trackBestStreak && !isPractice && !_runState.HadMiss && streak > songMemory.BestStreak)
         {
             songMemory.BestStreak = streak;
             MarkMemoryDirty(affectsSectionSnapshots: false, affectsNoteSplitSnapshots: false);
@@ -9900,7 +10780,7 @@ internal sealed class V1StockTracker
         {
             FinalizeNoteSplitCurrentSection(songMemory, currentSectionName, currentOverstrums, !isPractice);
         }
-        if (finishedSong && _runState.FirstMissStreak <= 0)
+        if (streakRead && finishedSong && _runState.FirstMissStreak <= 0)
         {
             _runState.FirstMissStreak = Math.Max(_runState.BestStreakThisRun, streak);
         }
@@ -9916,25 +10796,9 @@ internal sealed class V1StockTracker
                 ApplyNoteSplitSongPersonalBestSnapshot(songMemory);
             }
         }
-        if (trackCompletedRuns && !isPractice && finishedSong && !_runState.CompletedRunRecorded)
+        if (trackCompletedRuns && !isPractice && finishedSong && !_runState.CompletedRunRecorded && resultStats != null)
         {
-            int percent = CalculateRunPercent(resultStats, currentNotesHit, currentMissedNotes, currentOverstrums, fcThisRun);
-            songMemory.CompletedRuns.Add(new CompletedRunRecord
-            {
-                Index = songMemory.CompletedRuns.Count + 1,
-                CompletedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
-                Score = score,
-                BestStreak = _runState.BestStreakThisRun,
-                FirstMissStreak = _runState.FirstMissStreak,
-                GhostedNotes = currentGhostNotes,
-                Overstrums = currentOverstrums,
-                MissedNotes = currentMissedNotes,
-                Percent = percent,
-                FcAchieved = fcThisRun,
-                FinalSection = currentSectionName
-            });
-            _runState.CompletedRunRecorded = true;
-            MarkMemoryDirty(affectsSectionSnapshots: false, affectsNoteSplitSnapshots: false);
+            TryRecordCompletedRun(songMemory, currentSectionName, resultStats, currentNotesHit, currentGhostNotes, currentOverstrums, currentMissedNotes, fcThisRun);
         }
         if (trackFcAchieved && !isPractice && !songMemory.FcAchieved && finishedSong && fcThisRun)
         {
@@ -9996,7 +10860,7 @@ internal sealed class V1StockTracker
         }
 
         ApplyPendingNoteSplitMisses(_runState.NoteSplitCurrentSection);
-        CommitNoteSplitSection(songMemory, _runState.NoteSplitCurrentSection, updateFooterSnapshot: true);
+        CommitNoteSplitSection(songMemory, _runState.NoteSplitCurrentSection, updateFooterSnapshot: true, allowMemoryUpdates);
         _runState.NoteSplitCurrentSection = currentSectionName;
     }
 
@@ -10011,10 +10875,10 @@ internal sealed class V1StockTracker
         }
 
         ApplyPendingNoteSplitMisses(sectionName);
-        CommitNoteSplitSection(songMemory, sectionName, updateFooterSnapshot: false);
+        CommitNoteSplitSection(songMemory, sectionName, updateFooterSnapshot: false, allowMemoryUpdates);
     }
 
-    private void CommitNoteSplitSection(SongMemory songMemory, string sectionName, bool updateFooterSnapshot)
+    private void CommitNoteSplitSection(SongMemory songMemory, string sectionName, bool updateFooterSnapshot, bool allowMemoryUpdates)
     {
         if (string.IsNullOrWhiteSpace(sectionName) ||
             _runState.NoteSplitSectionsThisRun.ContainsKey(sectionName))
@@ -10025,8 +10889,13 @@ internal sealed class V1StockTracker
         int sectionMissCount = _runState.NoteSplitMissCountsBySectionThisRun.TryGetValue(sectionName, out int trackedMissCount)
             ? Math.Max(0, trackedMissCount)
             : 0;
-        SectionMemory sectionMemory = EnsureSectionMemory(songMemory, sectionName, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: true);
-        string resultKind = DetermineNoteSplitResultKind(sectionMemory.BestMissCount, sectionMissCount);
+        SectionMemory? sectionMemory = null;
+        if (!songMemory.Sections.TryGetValue(sectionName, out sectionMemory) && allowMemoryUpdates)
+        {
+            sectionMemory = EnsureSectionMemory(songMemory, sectionName, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: true);
+        }
+
+        string resultKind = DetermineNoteSplitResultKind(sectionMemory?.BestMissCount, sectionMissCount);
 
         _runState.NoteSplitSectionsThisRun[sectionName] = new NoteSplitSectionRunState
         {
@@ -10104,6 +10973,10 @@ internal sealed class V1StockTracker
     {
         bestMissCount = songMemory.BestRunMissedNotes;
         bestOverstrums = songMemory.BestRunOverstrums;
+        if (bestMissCount.HasValue)
+        {
+            return;
+        }
 
         foreach (CompletedRunRecord run in songMemory.CompletedRuns)
         {
@@ -10194,14 +11067,35 @@ internal sealed class V1StockTracker
         return currentMissedNotes <= 0 && currentOverstrums <= 0 ? 100 : 0;
     }
 
-    private void SnapshotNoteSplitPreviousValidRun(SongMemory songMemory)
+    private bool TrySnapshotNoteSplitPreviousValidRun(SongMemory? songMemory)
+    {
+        if (songMemory == null ||
+            !_runState.InRun ||
+            _runState.IsPracticeRun ||
+            _runState.NoteSplitPreviousValidRunSnapshotted)
+        {
+            return false;
+        }
+
+        Dictionary<string, int> snapshot = BuildPreviousValidNoteSplitRunSnapshot();
+        if (snapshot.Count == 0)
+        {
+            return false;
+        }
+
+        SnapshotNoteSplitPreviousValidRun(songMemory, snapshot);
+        _runState.NoteSplitPreviousValidRunSnapshotted = true;
+        return true;
+    }
+
+    private void SnapshotNoteSplitPreviousValidRun(SongMemory songMemory, Dictionary<string, int> snapshot)
     {
         foreach (SectionMemory sectionMemory in songMemory.Sections.Values)
         {
             sectionMemory.PreviousValidRunMissCount = null;
         }
 
-        foreach (KeyValuePair<string, int> pair in BuildPreviousValidNoteSplitRunSnapshot())
+        foreach (KeyValuePair<string, int> pair in snapshot)
         {
             EnsureSectionMemory(songMemory, pair.Key, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: true).PreviousValidRunMissCount = pair.Value;
         }
@@ -10234,10 +11128,192 @@ internal sealed class V1StockTracker
         return snapshot;
     }
 
+    private void ProcessNoteSplitCommands()
+    {
+        if (string.IsNullOrWhiteSpace(_noteSplitCommandsDir) || !Directory.Exists(_noteSplitCommandsDir))
+        {
+            return;
+        }
+
+        string[] commandFiles;
+        try
+        {
+            commandFiles = Directory.GetFiles(_noteSplitCommandsDir, "*.json");
+            Array.Sort(commandFiles, StringComparer.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            LogVerbose($"NoteSplitCommandListFailure | {ex.Message}");
+            return;
+        }
+
+        bool appliedAny = false;
+        bool obsExportDirty = false;
+        foreach (string commandFile in commandFiles)
+        {
+            try
+            {
+                NoteSplitCommand? command = JsonConvert.DeserializeObject<NoteSplitCommand>(File.ReadAllText(commandFile));
+                if (TryApplyNoteSplitCommand(command, out bool commandObsExportDirty))
+                {
+                    appliedAny = true;
+                    obsExportDirty |= commandObsExportDirty;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogVerbose($"NoteSplitCommandReadFailure | path={commandFile} | {ex.Message}");
+            }
+            finally
+            {
+                DeleteIfExists(commandFile);
+            }
+        }
+
+        if (appliedAny)
+        {
+            SaveMemory();
+            RequestImmediateExportRefresh(includeStateExport: true, includeObsExport: obsExportDirty);
+        }
+    }
+
+    private static bool IsKnownBasePlayerScoreField(FieldInfo field)
+    {
+        return string.Equals(field.Name, BasePlayerScoreFieldName, StringComparison.Ordinal) ||
+            string.Equals(field.Name, "\u00ca\u00bc\u00ca\u00bc\u00cb\u0081\u00ca\u00b4\u00ca\u00bf\u00ca\u00b8\u00ca\u00bf\u00ca\u00b2\u00ca\u00ba\u00ca\u00b3\u00ca\u00b5", StringComparison.Ordinal);
+    }
+
+    private bool TryApplyNoteSplitCommand(NoteSplitCommand? command, out bool obsExportDirty)
+    {
+        obsExportDirty = false;
+        if (command == null || string.IsNullOrWhiteSpace(command.SongKey))
+        {
+            return false;
+        }
+
+        if (!_memory.Songs.TryGetValue(command.SongKey, out SongMemory? songMemory))
+        {
+            songMemory = new SongMemory();
+            _memory.Songs[command.SongKey] = songMemory;
+        }
+
+        if (string.Equals(command.Command, NoteSplitCommand.SetSectionPersonalBest, StringComparison.Ordinal))
+        {
+            return TryApplyNoteSplitSectionPersonalBestCommand(command, songMemory);
+        }
+
+        if (string.Equals(command.Command, NoteSplitCommand.SetSongAttempts, StringComparison.Ordinal))
+        {
+            return TryApplyNoteSplitSongAttemptsCommand(command, songMemory, out obsExportDirty);
+        }
+
+        if (string.Equals(command.Command, NoteSplitCommand.SetSongPersonalBest, StringComparison.Ordinal))
+        {
+            return TryApplyNoteSplitSongPersonalBestCommand(command, songMemory);
+        }
+
+        return false;
+    }
+
+    private bool TryApplyNoteSplitSectionPersonalBestCommand(NoteSplitCommand command, SongMemory songMemory)
+    {
+        if (string.IsNullOrWhiteSpace(command.SectionKey))
+        {
+            return false;
+        }
+
+        int missCount = Math.Max(0, command.MissCount);
+        SectionMemory sectionMemory = EnsureSectionMemory(
+            songMemory,
+            command.SectionKey,
+            command.SongKey,
+            affectsSectionSnapshots: false,
+            affectsNoteSplitSnapshots: true);
+        if (sectionMemory.BestMissCount == missCount)
+        {
+            return false;
+        }
+
+        sectionMemory.BestMissCount = missCount;
+        MarkMemoryDirty(command.SongKey, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: true);
+        if (_runState.NoteSplitSectionsThisRun.TryGetValue(command.SectionKey, out NoteSplitSectionRunState? runState))
+        {
+            runState.ResultKind = DetermineNoteSplitResultKind(missCount, runState.MissCount);
+        }
+
+        if (string.Equals(_runState.NoteSplitPreviousSection, command.SectionKey, StringComparison.Ordinal) &&
+            _runState.NoteSplitPreviousSectionMissCount.HasValue)
+        {
+            _runState.NoteSplitPreviousSectionResultKind = DetermineNoteSplitResultKind(missCount, _runState.NoteSplitPreviousSectionMissCount.Value);
+        }
+
+        _noteSplitSnapshotCache = null;
+        MarkDesktopStateDirty();
+        StockTrackerLog.WriteDebug(
+            "NoteSplitManualPersonalBest | songKey=" + command.SongKey +
+            " | section=" + command.SectionKey +
+            " | misses=" + missCount.ToString(CultureInfo.InvariantCulture));
+        return true;
+    }
+
+    private bool TryApplyNoteSplitSongAttemptsCommand(NoteSplitCommand command, SongMemory songMemory, out bool obsExportDirty)
+    {
+        obsExportDirty = false;
+        int attempts = Math.Max(0, command.Attempts);
+        if (songMemory.Attempts == attempts)
+        {
+            return false;
+        }
+
+        songMemory.Attempts = attempts;
+        MarkMemoryDirty(command.SongKey, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: false);
+        MarkDesktopStateDirty();
+        obsExportDirty = IsTextExportEnabled(GetEnabledTextExportsSnapshot(), "attempts");
+        StockTrackerLog.WriteDebug(
+            "NoteSplitManualAttempts | songKey=" + command.SongKey +
+            " | attempts=" + attempts.ToString(CultureInfo.InvariantCulture));
+        return true;
+    }
+
+    private bool TryApplyNoteSplitSongPersonalBestCommand(NoteSplitCommand command, SongMemory songMemory)
+    {
+        int missCount = Math.Max(0, command.MissCount);
+        int overstrums = Math.Max(0, command.Overstrums);
+        if (songMemory.BestRunMissedNotes == missCount &&
+            songMemory.BestRunOverstrums == overstrums)
+        {
+            return false;
+        }
+
+        songMemory.BestRunMissedNotes = missCount;
+        songMemory.BestRunOverstrums = overstrums;
+        MarkMemoryDirty(command.SongKey, affectsSectionSnapshots: false, affectsNoteSplitSnapshots: false);
+        MarkDesktopStateDirty();
+        StockTrackerLog.WriteDebug(
+            "NoteSplitManualSongPersonalBest | songKey=" + command.SongKey +
+            " | misses=" + missCount.ToString(CultureInfo.InvariantCulture) +
+            " | overstrums=" + overstrums.ToString(CultureInfo.InvariantCulture));
+        return true;
+    }
+
     private void ResetRunIfNeeded()
     {
         if (_runState.InRun)
         {
+            SongMemory? runSongMemory = _runState.CachedSongMemory;
+            if (runSongMemory == null &&
+                !string.IsNullOrWhiteSpace(_runState.SongKey) &&
+                _memory.Songs.TryGetValue(_runState.SongKey, out SongMemory? existingSongMemory))
+            {
+                runSongMemory = existingSongMemory;
+            }
+
+            bool snapshottedNoteSplitRun = TrySnapshotNoteSplitPreviousValidRun(runSongMemory);
+            if (snapshottedNoteSplitRun)
+            {
+                SaveMemory();
+            }
+
             _noteSplitRunVersion++;
             MarkDesktopStateDirty();
             _runState = new RunState();
@@ -10460,7 +11536,10 @@ internal sealed class V1StockTracker
                 State = state,
                 ExportStateJson = exportStateJson,
                 ExportObs = exportObs,
-                IncludeDesktopOverlayWidgetState = ShouldIncludeDesktopOverlayWidgetState(state)
+                IncludeDesktopOverlayWidgetState = ShouldIncludeDesktopOverlayWidgetState(state),
+                ExportTemplateOverrides = CloneSectionFcsPastTemplateOverrides(state),
+                ExportTemplateVersion = _exportTemplateVersion,
+                PaceFileWrites = state.IsInSong
             };
         }
 
@@ -10531,6 +11610,7 @@ internal sealed class V1StockTracker
         builder.Append('|').Append(state.PreviousSectionResultKind ?? string.Empty);
         builder.Append('|').Append(state.Song?.SongKey ?? string.Empty);
         builder.Append('|').Append(state.Song?.Title ?? string.Empty);
+        builder.Append('|').Append(state.Song?.SongSpeedLabel ?? string.Empty);
         List<NoteSplitSectionState> rows = state.NoteSplitSections ?? new List<NoteSplitSectionState>();
         builder.Append("|rows=").Append(rows.Count.ToString(CultureInfo.InvariantCulture));
         for (int i = 0; i < rows.Count; i++)
@@ -10568,11 +11648,12 @@ internal sealed class V1StockTracker
         };
     }
 
-    private static string BuildActiveObsExportQueueSignature(TrackerState state)
+    private string BuildActiveObsExportQueueSignature(TrackerState state)
     {
         var builder = new StringBuilder();
         string currentSectionExportName = state.CurrentSection ?? string.Empty;
         builder.Append(state.Song?.SongKey ?? string.Empty);
+        AppendSectionFcsPastTemplateSignature(builder, state, GetSectionFcsPastTemplateOverrides(state));
         AppendMetricSignature(builder, "current_section", IsTextExportEnabled(state, "current_section"), currentSectionExportName);
         AppendMetricSignature(builder, "streak", IsTextExportEnabled(state, "streak"), state.Streak);
         AppendMetricSignature(builder, "best_streak", IsTextExportEnabled(state, "best_streak"), state.BestStreak);
@@ -10608,15 +11689,19 @@ internal sealed class V1StockTracker
         return builder.ToString();
     }
 
-    private void ExportObsState(TrackerState state)
+    private void ExportObsState(
+        TrackerState state,
+        bool paceWrites,
+        IReadOnlyDictionary<string, string> templateOverrides,
+        int templateVersion)
     {
         if (!HasAnyTextExportEnabled(state))
         {
-            DeleteObsText(_obsStatePath);
-            DeleteObsDirectory(Path.Combine(_obsDir, "current"));
+            DeleteObsText(_obsStatePath, paceWrites);
+            DeleteObsDirectory(Path.Combine(_obsDir, "current"), paceWrites);
             if (state.Song != null)
             {
-                DeleteObsDirectory(Path.Combine(_obsDir, "songs", SanitizeFileName(state.Song.SongKey)));
+                DeleteObsDirectory(Path.Combine(_obsDir, "songs", SanitizeFileName(state.Song.SongKey)), paceWrites);
             }
 
             _lastCurrentMetricExportSignature = string.Empty;
@@ -10632,8 +11717,8 @@ internal sealed class V1StockTracker
         if (!string.Equals(_lastCurrentMetricExportSignature, currentMetricSignature, StringComparison.Ordinal))
         {
             EnsureDirectory(currentDir);
-            WriteCurrentMetricExports(state, currentDir, currentSectionExportName);
-            DeleteObsText(Path.Combine(currentDir, "current_section_summary.txt"));
+            WriteCurrentMetricExports(state, currentDir, currentSectionExportName, paceWrites);
+            DeleteObsText(Path.Combine(currentDir, "current_section_summary.txt"), paceWrites);
             _lastCurrentMetricExportSignature = currentMetricSignature;
         }
 
@@ -10648,7 +11733,7 @@ internal sealed class V1StockTracker
         if (!string.Equals(_lastSongMetricExportSignature, songMetricSignature, StringComparison.Ordinal))
         {
             EnsureDirectory(songDir);
-            WriteSongMetricExports(state, songDir, currentSectionExportName);
+            WriteSongMetricExports(state, songDir, currentSectionExportName, paceWrites);
             _lastSongMetricExportSignature = songMetricSignature;
         }
 
@@ -10660,7 +11745,7 @@ internal sealed class V1StockTracker
         bool exportAnySectionFiles = exportedSections.Count > 0;
         if (exportAnySectionFiles)
         {
-            string sectionExportSignature = BuildSectionExportSignature(state);
+            string sectionExportSignature = BuildSectionExportSignature(state, templateOverrides);
             if (!string.Equals(_lastSectionExportSignature, sectionExportSignature, StringComparison.Ordinal))
             {
                 EnsureDirectory(sectionsDir);
@@ -10669,13 +11754,13 @@ internal sealed class V1StockTracker
                     string sectionExportName = section.Name;
                     string sectionDir = Path.Combine(sectionsDir, SanitizeFileName(sectionExportName));
                     EnsureDirectory(sectionDir);
-                    WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), BuildTrackedSectionExportText(sectionExportName, section.RunsPast));
-                    DeleteObsText(Path.Combine(sectionDir, "name.txt"));
-                    DeleteObsText(Path.Combine(sectionDir, "summary.txt"));
-                    DeleteObsText(Path.Combine(sectionDir, "tracked.txt"));
-                    DeleteObsText(Path.Combine(sectionDir, "start_time.txt"));
-                    DeleteObsText(Path.Combine(sectionDir, "attempts.txt"));
-                    DeleteObsText(Path.Combine(sectionDir, "killed_the_run.txt"));
+                    WriteObsText(Path.Combine(sectionDir, "fcs_past.txt"), BuildTrackedSectionExportText(state, section, sectionExportName, templateOverrides, templateVersion), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "name.txt"), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "summary.txt"), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "tracked.txt"), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "start_time.txt"), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "attempts.txt"), paceWrites);
+                    DeleteObsText(Path.Combine(sectionDir, "killed_the_run.txt"), paceWrites);
                 }
 
                 _lastSectionExportSignature = sectionExportSignature;
@@ -10686,7 +11771,7 @@ internal sealed class V1StockTracker
             string sectionExportSignature = state.Song.SongKey + "|none";
             if (!string.Equals(_lastSectionExportSignature, sectionExportSignature, StringComparison.Ordinal))
             {
-                DeleteObsDirectory(sectionsDir);
+                DeleteObsDirectory(sectionsDir, paceWrites);
                 _lastSectionExportSignature = sectionExportSignature;
             }
         }
@@ -10702,17 +11787,17 @@ internal sealed class V1StockTracker
                 {
                     string runDir = Path.Combine(runsDir, BuildCompletedRunDirectoryName(run));
                     EnsureDirectory(runDir);
-                    WriteObsText(Path.Combine(runDir, "completed_at_utc.txt"), BuildRunExportText("completed_at_utc", run));
-                    WriteObsText(Path.Combine(runDir, "percent.txt"), BuildRunExportText("percent", run));
-                    WriteObsText(Path.Combine(runDir, "score.txt"), BuildRunExportText("score", run));
-                    WriteObsText(Path.Combine(runDir, "best_streak.txt"), BuildRunExportText("best_streak", run));
-                    WriteObsText(Path.Combine(runDir, "first_miss_streak.txt"), BuildRunExportText("first_miss_streak", run));
-                    WriteObsText(Path.Combine(runDir, "ghosted_notes.txt"), BuildRunExportText("ghosted_notes", run));
-                    WriteObsText(Path.Combine(runDir, "overstrums.txt"), BuildRunExportText("overstrums", run));
-                    WriteObsText(Path.Combine(runDir, "missed_notes.txt"), BuildRunExportText("missed_notes", run));
-                    WriteObsText(Path.Combine(runDir, "fc_achieved.txt"), BuildRunExportText("fc_achieved", run));
-                    WriteObsText(Path.Combine(runDir, "final_section.txt"), BuildRunExportText("final_section", run));
-                    WriteObsText(Path.Combine(runDir, "summary.txt"), BuildRunExportText("summary", run));
+                    WriteObsText(Path.Combine(runDir, "completed_at_utc.txt"), BuildRunExportText("completed_at_utc", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "percent.txt"), BuildRunExportText("percent", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "score.txt"), BuildRunExportText("score", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "best_streak.txt"), BuildRunExportText("best_streak", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "first_miss_streak.txt"), BuildRunExportText("first_miss_streak", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "ghosted_notes.txt"), BuildRunExportText("ghosted_notes", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "overstrums.txt"), BuildRunExportText("overstrums", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "missed_notes.txt"), BuildRunExportText("missed_notes", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "fc_achieved.txt"), BuildRunExportText("fc_achieved", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "final_section.txt"), BuildRunExportText("final_section", run), paceWrites);
+                    WriteObsText(Path.Combine(runDir, "summary.txt"), BuildRunExportText("summary", run), paceWrites);
                 }
 
                 _lastCompletedRunsExportSignature = completedRunsSignature;
@@ -10723,7 +11808,7 @@ internal sealed class V1StockTracker
             string completedRunsSignature = state.Song.SongKey + "|none";
             if (!string.Equals(_lastCompletedRunsExportSignature, completedRunsSignature, StringComparison.Ordinal))
             {
-                DeleteObsDirectory(runsDir);
+                DeleteObsDirectory(runsDir, paceWrites);
                 _lastCompletedRunsExportSignature = completedRunsSignature;
             }
         }
@@ -10747,28 +11832,28 @@ internal sealed class V1StockTracker
         };
     }
 
-    private void WriteCurrentMetricExports(TrackerState state, string currentDir, string currentSectionExportName)
+    private void WriteCurrentMetricExports(TrackerState state, string currentDir, string currentSectionExportName, bool paceWrites)
     {
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), BuildMetricExportText("current_section", currentSectionExportName));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), BuildMetricExportText("streak", state.Streak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), BuildMetricExportText("best_streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), BuildMetricExportText("attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(currentDir, "current_ghosted_notes.txt"), BuildMetricExportText("current_ghosted_notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(currentDir, "current_overstrums.txt"), BuildMetricExportText("current_overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(currentDir, "current_missed_notes.txt"), BuildMetricExportText("current_missed_notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(currentDir, "lifetime_ghosted_notes.txt"), BuildMetricExportText("lifetime_ghosted_notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "global_lifetime_ghosted_notes"), Path.Combine(currentDir, "global_lifetime_ghosted_notes.txt"), BuildMetricExportText("global_lifetime_ghosted_notes", state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "fc_achieved"), Path.Combine(currentDir, "fc_achieved.txt"), BuildMetricExportText("fc_achieved", state.FcAchieved ? "True" : "False"));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(currentDir, "current_section.txt"), BuildMetricExportText("current_section", currentSectionExportName), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "streak"), Path.Combine(currentDir, "streak.txt"), BuildMetricExportText("streak", state.Streak.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "best_streak"), Path.Combine(currentDir, "best_streak.txt"), BuildMetricExportText("best_streak", state.BestStreak.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(currentDir, "attempts.txt"), BuildMetricExportText("attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(currentDir, "current_ghosted_notes.txt"), BuildMetricExportText("current_ghosted_notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(currentDir, "current_overstrums.txt"), BuildMetricExportText("current_overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(currentDir, "current_missed_notes.txt"), BuildMetricExportText("current_missed_notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(currentDir, "lifetime_ghosted_notes.txt"), BuildMetricExportText("lifetime_ghosted_notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "global_lifetime_ghosted_notes"), Path.Combine(currentDir, "global_lifetime_ghosted_notes.txt"), BuildMetricExportText("global_lifetime_ghosted_notes", state.GlobalLifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "fc_achieved"), Path.Combine(currentDir, "fc_achieved.txt"), BuildMetricExportText("fc_achieved", state.FcAchieved ? "True" : "False"), paceWrites);
     }
 
-    private void WriteSongMetricExports(TrackerState state, string songDir, string currentSectionExportName)
+    private void WriteSongMetricExports(TrackerState state, string songDir, string currentSectionExportName, bool paceWrites)
     {
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(songDir, "attempts.txt"), BuildMetricExportText("attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(songDir, "current_ghosted_notes.txt"), BuildMetricExportText("current_ghosted_notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(songDir, "current_overstrums.txt"), BuildMetricExportText("current_overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(songDir, "current_missed_notes.txt"), BuildMetricExportText("current_missed_notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(songDir, "lifetime_ghosted_notes.txt"), BuildMetricExportText("lifetime_ghosted_notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)));
-        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(songDir, "current_section.txt"), BuildMetricExportText("current_section", currentSectionExportName));
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "attempts"), Path.Combine(songDir, "attempts.txt"), BuildMetricExportText("attempts", state.Attempts.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_ghosted_notes"), Path.Combine(songDir, "current_ghosted_notes.txt"), BuildMetricExportText("current_ghosted_notes", state.CurrentGhostedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_overstrums"), Path.Combine(songDir, "current_overstrums.txt"), BuildMetricExportText("current_overstrums", state.CurrentOverstrums.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_missed_notes"), Path.Combine(songDir, "current_missed_notes.txt"), BuildMetricExportText("current_missed_notes", state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "lifetime_ghosted_notes"), Path.Combine(songDir, "lifetime_ghosted_notes.txt"), BuildMetricExportText("lifetime_ghosted_notes", state.LifetimeGhostedNotes.ToString(CultureInfo.InvariantCulture)), paceWrites);
+        WriteOrDeleteObsText(IsTextExportEnabled(state, "current_section"), Path.Combine(songDir, "current_section.txt"), BuildMetricExportText("current_section", currentSectionExportName), paceWrites);
     }
 
     private static string BuildCurrentMetricExportSignature(TrackerState state, string currentSectionExportName)
@@ -10813,15 +11898,36 @@ internal sealed class V1StockTracker
         }
     }
 
-    private static string BuildTrackedSectionExportText(string sectionName, int fcsPast)
+    private string BuildTrackedSectionExportText(TrackerState state, string sectionName, int fcsPast)
     {
-        return $"FCs UP TO {sectionName}: {fcsPast.ToString(CultureInfo.InvariantCulture)}";
+        SectionStatsState section = new()
+        {
+            Name = sectionName,
+            RunsPast = fcsPast,
+            Tracked = true
+        };
+        Dictionary<string, string> templateOverrides = new(StringComparer.Ordinal);
+        return BuildTrackedSectionExportText(state, section, sectionName, templateOverrides, _exportTemplateVersion);
     }
 
-    private static string BuildSectionExportSignature(TrackerState state)
+    private string BuildTrackedSectionExportText(
+        TrackerState state,
+        SectionStatsState section,
+        string sectionExportName,
+        IReadOnlyDictionary<string, string> templateOverrides,
+        int templateVersion)
+    {
+        string value = section.RunsPast.ToString(CultureInfo.InvariantCulture);
+        ExportTemplateRenderContext context = CreateSectionTemplateContext(state, section, sectionExportName, "FCs Past", value);
+        string source = GetEffectiveSectionFcsPastTemplateSource(templateOverrides, sectionExportName);
+        return RenderExportTemplateSource(SectionFcsPastTemplateId, source, context, templateVersion);
+    }
+
+    private static string BuildSectionExportSignature(TrackerState state, IReadOnlyDictionary<string, string> templateOverrides)
     {
         var builder = new StringBuilder();
         builder.Append(state.Song?.SongKey ?? string.Empty);
+        AppendSectionFcsPastTemplateSignature(builder, state, templateOverrides);
         foreach (SectionStatsState section in state.SectionStats.Where(section => section.Tracked).OrderBy(candidate => candidate.Index))
         {
             builder.Append('|');
@@ -10912,16 +12018,27 @@ internal sealed class V1StockTracker
                         break;
                     }
 
+                    if (workItem.PaceFileWrites)
+                    {
+                        Thread.Sleep(ActiveSongExportCoalesceMilliseconds);
+                        workItem = CoalescePendingExportWork(workItem);
+                    }
+
                     string? stateJson = null;
                     if (workItem.ExportStateJson)
                     {
                         stateJson = SerializeDesktopOverlayState(workItem.State, workItem.IncludeDesktopOverlayWidgetState);
-                        WriteTextFileCached(_statePath, stateJson);
+                        WriteTextFileCached(_statePath, stateJson, workItem.PaceFileWrites);
                     }
 
                     if (workItem.ExportObs)
                     {
-                        ExportObsState(workItem.State);
+                        ExportObsState(workItem.State, workItem.PaceFileWrites, workItem.ExportTemplateOverrides, workItem.ExportTemplateVersion);
+                    }
+
+                    if (workItem.PaceFileWrites)
+                    {
+                        Thread.Sleep(ActiveSongExportBatchCooldownMilliseconds);
                     }
                 }
             }
@@ -10933,6 +12050,30 @@ internal sealed class V1StockTracker
             {
                 StockTrackerLog.Write(ex);
             }
+        }
+    }
+
+    private ExportWorkItem CoalescePendingExportWork(ExportWorkItem workItem)
+    {
+        lock (_exportWorkerSync)
+        {
+            if (_pendingExport == null)
+            {
+                return workItem;
+            }
+
+            ExportWorkItem pending = _pendingExport;
+            _pendingExport = null;
+            return new ExportWorkItem
+            {
+                State = pending.State,
+                ExportStateJson = workItem.ExportStateJson || pending.ExportStateJson,
+                ExportObs = workItem.ExportObs || pending.ExportObs,
+                IncludeDesktopOverlayWidgetState = pending.IncludeDesktopOverlayWidgetState,
+                ExportTemplateOverrides = pending.ExportTemplateOverrides,
+                ExportTemplateVersion = pending.ExportTemplateVersion,
+                PaceFileWrites = workItem.PaceFileWrites || pending.PaceFileWrites
+            };
         }
     }
 
@@ -11161,6 +12302,7 @@ internal sealed class V1StockTracker
 
     private static SongConfig CloneSongConfig(SongConfig config)
     {
+        NormalizeSongConfigDictionaries(config);
         SongConfig clone = new SongConfig
         {
             Title = config.Title,
@@ -11171,6 +12313,11 @@ internal sealed class V1StockTracker
         foreach (KeyValuePair<string, bool> pair in config.TrackedSections)
         {
             clone.TrackedSections[pair.Key] = pair.Value;
+        }
+
+        foreach (KeyValuePair<string, string> pair in config.SectionFcsPastTemplateOverrides)
+        {
+            clone.SectionFcsPastTemplateOverrides[pair.Key] = pair.Value ?? string.Empty;
         }
 
         foreach (KeyValuePair<string, OverlayWidgetConfig> pair in config.OverlayWidgets)
@@ -11228,6 +12375,38 @@ internal sealed class V1StockTracker
 
         foreach (KeyValuePair<string, string> pair in source)
         {
+            clone[pair.Key] = pair.Value ?? string.Empty;
+        }
+
+        return clone;
+    }
+
+    private IReadOnlyDictionary<string, string> GetSectionFcsPastTemplateOverrides(TrackerState state)
+    {
+        SongDescriptor? song = state.Song;
+        string configKey = song?.OverlayLayoutKey ?? song?.SongKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(configKey) ||
+            !_config.Songs.TryGetValue(configKey, out SongConfig? songConfig) ||
+            songConfig == null)
+        {
+            return EmptySectionFcsPastTemplateOverrides;
+        }
+
+        NormalizeSongConfigDictionaries(songConfig);
+        return songConfig.SectionFcsPastTemplateOverrides;
+    }
+
+    private Dictionary<string, string> CloneSectionFcsPastTemplateOverrides(TrackerState state)
+    {
+        Dictionary<string, string> clone = new(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, string> source = GetSectionFcsPastTemplateOverrides(state);
+        foreach (KeyValuePair<string, string> pair in source)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+            {
+                continue;
+            }
+
             clone[pair.Key] = pair.Value ?? string.Empty;
         }
 
@@ -11420,9 +12599,9 @@ internal sealed class V1StockTracker
         }
     }
 
-    private void WriteObsText(string path, string text)
+    private void WriteObsText(string path, string text, bool paceWrites = false)
     {
-        WriteTextFileCached(path, text ?? string.Empty);
+        WriteTextFileCached(path, text ?? string.Empty, paceWrites);
     }
 
     private static string FormatObsValue(string label, string value)
@@ -11440,6 +12619,11 @@ internal sealed class V1StockTracker
     private string RenderExportTemplate(string templateId, ExportTemplateRenderContext context, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
     {
         return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorker(templateId, templateOverrides, templateVersion), context);
+    }
+
+    private string RenderExportTemplateSource(string templateId, string source, ExportTemplateRenderContext context, int templateVersion)
+    {
+        return ExportTemplateEngine.Render(GetCompiledExportTemplateForWorkerSource(templateId, source, templateVersion), context);
     }
 
     private CompiledExportTemplate GetCompiledExportTemplateForMain(string templateId)
@@ -11466,13 +12650,25 @@ internal sealed class V1StockTracker
 
     private CompiledExportTemplate GetCompiledExportTemplateForWorker(string templateId, IReadOnlyDictionary<string, string> templateOverrides, int templateVersion)
     {
+        ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
+            ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
+
+        string source = templateOverrides.TryGetValue(definition.TemplateId, out string? templateOverride)
+            ? (templateOverride ?? string.Empty)
+            : definition.DefaultTemplate;
+        return GetCompiledExportTemplateForWorkerSource(templateId, source, templateVersion);
+    }
+
+    private CompiledExportTemplate GetCompiledExportTemplateForWorkerSource(string templateId, string source, int templateVersion)
+    {
         if (_workerCompiledExportTemplatesVersion != templateVersion)
         {
             _workerCompiledExportTemplates.Clear();
             _workerCompiledExportTemplatesVersion = templateVersion;
         }
 
-        if (_workerCompiledExportTemplates.TryGetValue(templateId, out CompiledExportTemplate? compiledTemplate))
+        string cacheKey = templateId + "\n" + (source ?? string.Empty);
+        if (_workerCompiledExportTemplates.TryGetValue(cacheKey, out CompiledExportTemplate? compiledTemplate))
         {
             return compiledTemplate;
         }
@@ -11480,11 +12676,8 @@ internal sealed class V1StockTracker
         ExportTemplateDefinition definition = ExportTemplateCatalog.TryGet(templateId)
             ?? throw new InvalidOperationException("Unknown export template id: " + templateId);
 
-        string source = templateOverrides.TryGetValue(definition.TemplateId, out string? templateOverride)
-            ? (templateOverride ?? string.Empty)
-            : definition.DefaultTemplate;
-        CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source);
-        _workerCompiledExportTemplates[templateId] = compiled;
+        CompiledExportTemplate compiled = CompileExportTemplateWithFallback(definition, source ?? string.Empty);
+        _workerCompiledExportTemplates[cacheKey] = compiled;
         return compiled;
     }
 
@@ -11508,6 +12701,27 @@ internal sealed class V1StockTracker
         return overrides.TryGetValue(definition.TemplateId, out string? templateOverride)
             ? (templateOverride ?? string.Empty)
             : definition.DefaultTemplate;
+    }
+
+    private static string GetEffectiveSectionFcsPastTemplateSource(IReadOnlyDictionary<string, string> templateOverrides, string sectionExportName)
+    {
+        return templateOverrides.TryGetValue(sectionExportName, out string? templateOverride) &&
+            !string.IsNullOrWhiteSpace(templateOverride)
+            ? templateOverride
+            : SectionFcsPastDefaultTemplate;
+    }
+
+    private static void AppendSectionFcsPastTemplateSignature(StringBuilder builder, TrackerState state, IReadOnlyDictionary<string, string> templateOverrides)
+    {
+        builder.Append("|section.fcs_past.templates:");
+        foreach (SectionStatsState section in state.SectionStats.Where(section => section.Tracked).OrderBy(candidate => candidate.Index))
+        {
+            string sectionName = section.Name ?? string.Empty;
+            builder.Append('|');
+            builder.Append(section.Index.ToString(CultureInfo.InvariantCulture));
+            builder.Append(':').Append(sectionName);
+            builder.Append('=').Append(GetEffectiveSectionFcsPastTemplateSource(templateOverrides, sectionName));
+        }
     }
 
     private void LogInvalidExportTemplate(ExportTemplateDefinition definition, string source, string? errorMessage, int errorLineNumber)
@@ -11538,6 +12752,7 @@ internal sealed class V1StockTracker
         ExportTemplateRenderContext context = CreateCommonExportTemplateContext(state);
         context.Set("label", label);
         context.Set("value", value);
+        context.Set("section", sectionExportName);
         context.Set("section_name", sectionExportName);
         context.Set("attempts", section.Attempts);
         context.Set("fcs_past", section.RunsPast);
@@ -11582,7 +12797,7 @@ internal sealed class V1StockTracker
         return context;
     }
 
-    private void DeleteObsText(string path)
+    private void DeleteObsText(string path, bool paceWrites = false)
     {
         lock (_fileWriteSync)
         {
@@ -11598,12 +12813,13 @@ internal sealed class V1StockTracker
                 return;
             }
 
+            PaceBackgroundFileWrite(paceWrites);
             File.Delete(path);
             _knownMissingTextPaths.Add(path);
         }
     }
 
-    private void DeleteObsDirectory(string path)
+    private void DeleteObsDirectory(string path, bool paceWrites = false)
     {
         lock (_fileWriteSync)
         {
@@ -11636,6 +12852,7 @@ internal sealed class V1StockTracker
                 return;
             }
 
+            PaceBackgroundFileWrite(paceWrites);
             Directory.Delete(path, true);
         }
     }
@@ -11703,19 +12920,19 @@ internal sealed class V1StockTracker
         }
     }
 
-    private void WriteOrDeleteObsText(bool enabled, string path, string text)
+    private void WriteOrDeleteObsText(bool enabled, string path, string text, bool paceWrites = false)
     {
         if (enabled)
         {
-            WriteObsText(path, text);
+            WriteObsText(path, text, paceWrites);
         }
         else
         {
-            DeleteObsText(path);
+            DeleteObsText(path, paceWrites);
         }
     }
 
-    private void WriteTextFileCached(string path, string content)
+    private void WriteTextFileCached(string path, string content, bool paceWrites = false)
     {
         lock (_fileWriteSync)
         {
@@ -11726,9 +12943,32 @@ internal sealed class V1StockTracker
                 return;
             }
 
+            PaceBackgroundFileWrite(paceWrites);
             WriteJsonFile(path, content);
             _fileWriteCache[path] = content;
             _knownMissingTextPaths.Remove(path);
+        }
+    }
+
+    private void PaceBackgroundFileWrite(bool enabled)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        lock (_backgroundWritePaceSync)
+        {
+            DateTime now = DateTime.UtcNow;
+            double elapsedMilliseconds = (now - _lastBackgroundFileWriteUtc).TotalMilliseconds;
+            int sleepMilliseconds = ActiveSongFileWriteMinIntervalMilliseconds - (int)Math.Floor(elapsedMilliseconds);
+            if (sleepMilliseconds > 0)
+            {
+                Thread.Sleep(sleepMilliseconds);
+                now = DateTime.UtcNow;
+            }
+
+            _lastBackgroundFileWriteUtc = now;
         }
     }
 
@@ -11905,16 +13145,30 @@ internal sealed class V1StockTracker
         {
             CachedNoteSplitSectionRow row = _noteSplitSnapshotCache.Rows[i];
             _runState.NoteSplitSectionsThisRun.TryGetValue(row.Key, out NoteSplitSectionRunState? runState);
+            bool isCurrent = string.Equals(row.Key, currentSectionName, StringComparison.Ordinal);
+            int? currentRunMissCount = runState?.MissCount;
+            string resultKind = runState?.ResultKind ?? NoteSplitResultKind.None;
+            if (_runState.NoteSplitMissCountsBySectionThisRun.TryGetValue(row.Key, out int liveMissCount))
+            {
+                currentRunMissCount = Math.Max(0, liveMissCount);
+                resultKind = DetermineNoteSplitResultKind(row.PersonalBestMissCount, currentRunMissCount.Value);
+            }
+            if (isCurrent)
+            {
+                currentRunMissCount = (currentRunMissCount ?? 0) + Math.Max(0, _runState.PendingNoteSplitMisses);
+                resultKind = DetermineNoteSplitResultKind(row.PersonalBestMissCount, currentRunMissCount.Value);
+            }
+
             rows.Add(new NoteSplitSectionState
             {
                 Order = row.Order,
                 Key = row.Key,
                 Name = row.Name,
-                IsCurrent = string.Equals(row.Key, currentSectionName, StringComparison.Ordinal),
+                IsCurrent = isCurrent,
                 PreviousValidRunMissCount = row.PreviousValidRunMissCount,
                 PersonalBestMissCount = row.PersonalBestMissCount,
-                CurrentRunMissCount = runState?.MissCount,
-                ResultKind = runState?.ResultKind ?? NoteSplitResultKind.None
+                CurrentRunMissCount = currentRunMissCount,
+                ResultKind = resultKind
             });
         }
 
@@ -12217,7 +13471,6 @@ public sealed class SongDescriptor
     public string? OverlayLayoutKey { get; set; }
     [JsonIgnore]
     public int SongSpeedPercent { get; set; } = 100;
-    [JsonIgnore]
     public string SongSpeedLabel { get; set; } = "100%";
     [JsonIgnore]
     public string DifficultyCode { get; set; } = "X";
@@ -12394,6 +13647,7 @@ public sealed class SongConfig
     public string? Artist { get; set; }
     public string? Charter { get; set; }
     public Dictionary<string, bool> TrackedSections { get; set; } = new();
+    public Dictionary<string, string> SectionFcsPastTemplateOverrides { get; set; } = new();
     public Dictionary<string, OverlayWidgetConfig> OverlayWidgets { get; set; } = new();
 }
 
@@ -12531,6 +13785,12 @@ internal sealed class RunState
     public string CachedSongMemoryKey { get; set; } = string.Empty;
     public SongConfig? CachedSongConfig { get; set; }
     public string CachedSongConfigKey { get; set; } = string.Empty;
+    public int CachedStreak { get; set; }
+    public float LastStreakRefreshAt { get; set; }
+    public bool HasCachedStreak { get; set; }
+    public int CachedOverstrums { get; set; }
+    public float LastOverstrumsRefreshAt { get; set; }
+    public bool HasCachedOverstrums { get; set; }
     public int CachedNotesHit { get; set; }
     public float LastNotesHitRefreshAt { get; set; }
     public bool HasCachedNotesHit { get; set; }
@@ -12548,6 +13808,8 @@ internal sealed class RunState
     public int FirstMissStreak { get; set; }
     public bool HadMiss { get; set; }
     public bool CompletedRunRecorded { get; set; }
+    public bool IsPracticeRun { get; set; }
+    public bool NoteSplitPreviousValidRunSnapshotted { get; set; }
     public string NoteSplitCurrentSection { get; set; } = string.Empty;
     public int PendingNoteSplitMisses { get; set; }
     public string NoteSplitPreviousSection { get; set; } = string.Empty;
@@ -12578,6 +13840,20 @@ internal sealed class NoteSplitSectionRunState
 {
     public int MissCount { get; set; }
     public string ResultKind { get; set; } = NoteSplitResultKind.None;
+}
+
+internal sealed class NoteSplitCommand
+{
+    public const string SetSectionPersonalBest = "set_section_personal_best";
+    public const string SetSongAttempts = "set_song_attempts";
+    public const string SetSongPersonalBest = "set_song_personal_best";
+
+    public string Command { get; set; } = string.Empty;
+    public string SongKey { get; set; } = string.Empty;
+    public string SectionKey { get; set; } = string.Empty;
+    public int MissCount { get; set; }
+    public int Overstrums { get; set; }
+    public int Attempts { get; set; }
 }
 
 internal sealed class PendingNoteSplitBestOverstrumBackfill
@@ -12680,7 +13956,6 @@ internal sealed class RuntimeFeatureFlags
 
 internal sealed class TrackingRequirements
 {
-    public bool NeedScore { get; set; }
     public bool NeedStreak { get; set; }
     public bool NeedGhostNotes { get; set; }
     public bool NeedOverstrums { get; set; }
@@ -12697,6 +13972,7 @@ internal sealed class TrackingRequirements
     public bool NeedCompletedRuns { get; set; }
     public bool NeedAttemptTracking { get; set; }
     public bool NeedAttemptTextExport { get; set; }
+    public bool NeedCurrentOverstrumsExport { get; set; }
     public bool NeedExactMissTracking { get; set; }
     public bool NeedSectionFcsPastTracking { get; set; }
     public bool NeedLifetimeGhostTracking { get; set; }
@@ -12711,6 +13987,9 @@ internal sealed class ExportWorkItem
     public bool ExportStateJson { get; set; }
     public bool ExportObs { get; set; }
     public bool IncludeDesktopOverlayWidgetState { get; set; }
+    public Dictionary<string, string> ExportTemplateOverrides { get; set; } = new(StringComparer.Ordinal);
+    public int ExportTemplateVersion { get; set; }
+    public bool PaceFileWrites { get; set; }
 }
 
 internal sealed class PersistenceWriteItem

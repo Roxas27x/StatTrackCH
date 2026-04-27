@@ -1,7 +1,9 @@
 @echo off
 setlocal EnableExtensions
 title StatTrack Installer
-cd /d "%~dp0"
+set "SCRIPT_PATH=%~f0"
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
 set "GAME_DIR="
 set "NO_PAUSE="
@@ -26,7 +28,7 @@ goto fail
  if defined ELEVATE_RELEASE_ROOT (
      set "RELEASE_ROOT=%ELEVATE_RELEASE_ROOT%"
  ) else (
-     set "RELEASE_ROOT=%~dp0"
+     set "RELEASE_ROOT=%SCRIPT_DIR%"
  )
 set "DEFAULT_GAME_DIR=C:\Program Files\Clone Hero"
 set "STOCK_DLL=%RELEASE_ROOT%StatTrack.dll"
@@ -34,8 +36,8 @@ set "PATCHER_EXE=%RELEASE_ROOT%V1StockAssemblyPatcher.exe"
 set "DESKTOP_OVERLAY_EXE=%RELEASE_ROOT%StatTrackOverlay.exe"
 set "RUNTIME_CHECKER_EXE=%RELEASE_ROOT%V1RuntimeCompatibilityChecker.exe"
 set "CLEAN_ASSEMBLY_PATH=%RELEASE_ROOT%clean\Assembly-CSharp.dll"
-set "CLEAN_SHARED_ASSETS_PATH=%RELEASE_ROOT%clean\sharedassets1.assets"
-set "PATCHED_SHARED_ASSETS_PATH=%RELEASE_ROOT%patched\sharedassets1.assets"
+set "PATCHED_SHARED_ASSETS_DIR=%RELEASE_ROOT%patched"
+set "PATCHED_SHARED_ASSETS_MANIFEST=%PATCHED_SHARED_ASSETS_DIR%\sharedassets1-manifest.txt"
 for %%I in ("%DEFAULT_GAME_DIR%") do set "DEFAULT_GAME_DIR=%%~fI"
 
 echo.
@@ -44,11 +46,15 @@ echo -------------------
 echo Choose the Clone Hero folder that contains "Clone Hero.exe".
 echo.
 
-for %%F in ("%STOCK_DLL%" "%PATCHER_EXE%" "%DESKTOP_OVERLAY_EXE%" "%RUNTIME_CHECKER_EXE%" "%CLEAN_ASSEMBLY_PATH%" "%CLEAN_SHARED_ASSETS_PATH%" "%PATCHED_SHARED_ASSETS_PATH%") do (
+for %%F in ("%STOCK_DLL%" "%PATCHER_EXE%" "%DESKTOP_OVERLAY_EXE%" "%RUNTIME_CHECKER_EXE%" "%CLEAN_ASSEMBLY_PATH%" "%PATCHED_SHARED_ASSETS_MANIFEST%") do (
     if not exist "%%~fF" (
         echo Missing release file: %%~fF
         goto fail
     )
+)
+if not exist "%PATCHED_SHARED_ASSETS_DIR%\" (
+    echo Missing release folder: %PATCHED_SHARED_ASSETS_DIR%
+    goto fail
 )
 
 call :resolveGameDir || goto fail
@@ -65,21 +71,8 @@ set "BACKUP_SHARED_ASSETS_PATH=%DATA_DIR%\sharedassets1.assets.stattrack-backup"
 set "TARGET_HOOK_DLL=%MANAGED_DIR%\StatTrack.dll"
 set "TARGET_OVERLAY_EXE=%MANAGED_DIR%\StatTrackOverlay.exe"
 
-call :moveExistingFileAside "%ASSEMBLY_PATH%" "%BACKUP_ASSEMBLY_PATH%" "Assembly-CSharp.dll" || goto fail
-copy /y "%CLEAN_ASSEMBLY_PATH%" "%ASSEMBLY_PATH%" >nul
-if errorlevel 1 (
-    echo Failed to install clean Assembly-CSharp.dll:
-    echo %ASSEMBLY_PATH%
-    goto fail
-)
-
-call :moveExistingFileAside "%SHARED_ASSETS_PATH%" "%BACKUP_SHARED_ASSETS_PATH%" "sharedassets1.assets" || goto fail
-copy /y "%CLEAN_SHARED_ASSETS_PATH%" "%SHARED_ASSETS_PATH%" >nul
-if errorlevel 1 (
-    echo Failed to install clean sharedassets1.assets:
-    echo %SHARED_ASSETS_PATH%
-    goto fail
-)
+call :prepareBaselineFile "%ASSEMBLY_PATH%" "%BACKUP_ASSEMBLY_PATH%" "Assembly-CSharp.dll" || goto fail
+call :prepareBaselineFile "%SHARED_ASSETS_PATH%" "%BACKUP_SHARED_ASSETS_PATH%" "sharedassets1.assets" || goto fail
 
 "%RUNTIME_CHECKER_EXE%" "%STOCK_DLL%" "%MANAGED_DIR%"
 if errorlevel 1 (
@@ -108,17 +101,12 @@ if errorlevel 1 (
     goto fail
 )
 
-copy /y "%PATCHED_SHARED_ASSETS_PATH%" "%SHARED_ASSETS_PATH%" >nul
-if errorlevel 1 (
-    echo Failed to install patched sharedassets1.assets:
-    echo %SHARED_ASSETS_PATH%
-    goto fail
-)
+call :installPatchedSharedAssets || goto fail
 
 echo.
 echo StatTrack installed successfully.
 echo Game folder: %GAME_DIR%
-echo Existing Assembly-CSharp.dll and sharedassets1.assets were renamed before install.
+echo Existing Assembly-CSharp.dll and sharedassets1.assets baselines were backed up before install.
 echo.
 echo Launch "Clone Hero.exe" from that folder and use Home / F8 to open the overlay.
 echo.
@@ -171,13 +159,85 @@ if not exist "%GAME_DIR%\Clone Hero_Data\sharedassets1.assets" (
 )
 exit /b 0
 
-:moveExistingFileAside
+:prepareBaselineFile
 set "MOVE_SOURCE=%~1"
 set "MOVE_BACKUP=%~2"
 set "MOVE_LABEL=%~3"
-if not exist "%MOVE_SOURCE%" exit /b 0
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$source = $env:MOVE_SOURCE; $preferred = $env:MOVE_BACKUP; $label = $env:MOVE_LABEL; if(-not (Test-Path -LiteralPath $source)){ exit 0 }; $backup = $preferred; if(Test-Path -LiteralPath $backup){ $dir = Split-Path -Parent $source; $leaf = Split-Path -Leaf $source; $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'; $backup = Join-Path $dir ($leaf + '.pre-stattrack-' + $stamp + '.bak'); $counter = 1; while(Test-Path -LiteralPath $backup){ $backup = Join-Path $dir ($leaf + '.pre-stattrack-' + $stamp + '-' + $counter + '.bak'); $counter++ } }; Move-Item -LiteralPath $source -Destination $backup; Write-Host ('Renamed existing ' + $label + ' to: ' + $backup)"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$source = $env:MOVE_SOURCE; $backup = $env:MOVE_BACKUP; $label = $env:MOVE_LABEL; if(Test-Path -LiteralPath $backup){ Copy-Item -LiteralPath $backup -Destination $source -Force; Write-Host ('Restored ' + $label + ' baseline from: ' + $backup); exit 0 }; if(-not (Test-Path -LiteralPath $source)){ Write-Error ('Missing ' + $label + ': ' + $source); exit 1 }; Move-Item -LiteralPath $source -Destination $backup; Copy-Item -LiteralPath $backup -Destination $source -Force; Write-Host ('Renamed existing ' + $label + ' to: ' + $backup); Write-Host ('Restored ' + $label + ' baseline for patching.')"
 exit /b %ERRORLEVEL%
+
+:installPatchedSharedAssets
+set "LOCAL_SHARED_ASSETS_HASH="
+set "LOCAL_SHARED_ASSETS_VERSION="
+set "UNITY_PLAYER_VERSION="
+set "PATCHED_SHARED_ASSETS_PATH="
+set "PATCHED_SHARED_ASSETS_MATCH="
+for /f "usebackq tokens=1,2,3 delims=|" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$path = $env:SHARED_ASSETS_PATH; $bytes = [System.IO.File]::ReadAllBytes($path); $count = [Math]::Min($bytes.Length, 4096); $text = [System.Text.Encoding]::ASCII.GetString($bytes, 0, $count); $assetVersion = 'unknown'; if($text -match '20\d{2}\.\d+\.\d+f\d+'){ $assetVersion = $Matches[0] }; $engineVersion = 'unknown'; $unityPlayer = Join-Path $env:GAME_DIR 'UnityPlayer.dll'; if(Test-Path -LiteralPath $unityPlayer){ $productVersion = (Get-Item -LiteralPath $unityPlayer).VersionInfo.ProductVersion; if($productVersion -match '20\d{2}\.\d+\.\d+f\d+'){ $engineVersion = $Matches[0] } }; $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant(); [Console]::WriteLine($hash + '|' + $assetVersion + '|' + $engineVersion)"`) do (
+    set "LOCAL_SHARED_ASSETS_HASH=%%I"
+    set "LOCAL_SHARED_ASSETS_VERSION=%%J"
+    set "UNITY_PLAYER_VERSION=%%K"
+)
+if not defined LOCAL_SHARED_ASSETS_HASH (
+    echo Failed to inspect sharedassets1.assets:
+    echo %SHARED_ASSETS_PATH%
+    exit /b 1
+)
+
+echo.
+echo Detected sharedassets1.assets baseline:
+echo   Asset serialized version: %LOCAL_SHARED_ASSETS_VERSION%
+echo   UnityPlayer version: %UNITY_PLAYER_VERSION%
+echo   SHA256: %LOCAL_SHARED_ASSETS_HASH%
+
+set "PREFER_UNITY_PLAYER_VERSION="
+if /i not "%UNITY_PLAYER_VERSION%"=="unknown" (
+    if /i not "%LOCAL_SHARED_ASSETS_VERSION%"=="unknown" (
+        if /i not "%UNITY_PLAYER_VERSION%"=="%LOCAL_SHARED_ASSETS_VERSION%" set "PREFER_UNITY_PLAYER_VERSION=1"
+    )
+)
+
+set "PATCHED_SHARED_ASSETS_HASH_PATH=%PATCHED_SHARED_ASSETS_DIR%\sharedassets1.%LOCAL_SHARED_ASSETS_HASH%.assets"
+if defined PREFER_UNITY_PLAYER_VERSION (
+    echo   Asset version mismatch detected; selecting the patch for the UnityPlayer version.
+    call :findVersionMatchedSharedAssets
+) else (
+    if exist "%PATCHED_SHARED_ASSETS_HASH_PATH%" (
+        set "PATCHED_SHARED_ASSETS_PATH=%PATCHED_SHARED_ASSETS_HASH_PATH%"
+        set "PATCHED_SHARED_ASSETS_MATCH=exact baseline hash"
+    ) else (
+        call :findVersionMatchedSharedAssets
+    )
+)
+
+if not defined PATCHED_SHARED_ASSETS_PATH (
+    echo.
+    echo Warning: this Clone Hero build uses an unsupported sharedassets1.assets baseline.
+    echo Keeping the user's current sharedassets1.assets to avoid black menus or missing textures.
+    echo Animated menu shader support will be skipped for this install.
+    echo.
+    exit /b 0
+)
+copy /y "%PATCHED_SHARED_ASSETS_PATH%" "%SHARED_ASSETS_PATH%" >nul
+if errorlevel 1 (
+    echo Failed to install patched sharedassets1.assets:
+    echo %SHARED_ASSETS_PATH%
+    exit /b 1
+)
+echo Installed StatTrack animated menu asset patch using %PATCHED_SHARED_ASSETS_MATCH%.
+exit /b %ERRORLEVEL%
+
+:findVersionMatchedSharedAssets
+set "MATCH_FILE="
+set "MATCH_REASON="
+for /f "usebackq tokens=1,2 delims=|" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$manifest = $env:PATCHED_SHARED_ASSETS_MANIFEST; $preferred = @(); if($env:UNITY_PLAYER_VERSION -and $env:UNITY_PLAYER_VERSION -ne 'unknown'){ $preferred += @($env:UNITY_PLAYER_VERSION, 'UnityPlayer version') }; if($env:LOCAL_SHARED_ASSETS_VERSION -and $env:LOCAL_SHARED_ASSETS_VERSION -ne 'unknown'){ $preferred += @($env:LOCAL_SHARED_ASSETS_VERSION, 'asset serialized version') }; $entries = @(Get-Content -LiteralPath $manifest | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object { $parts = $_ -split '\|'; if($parts.Count -ge 3){ [pscustomobject]@{ Hash = $parts[0]; Version = $parts[1]; File = $parts[2] } } }); for($i = 0; $i -lt $preferred.Count; $i += 2){ $version = $preferred[$i]; $reason = $preferred[$i + 1]; $matches = @($entries | Where-Object { $_.Version -eq $version }); if($matches.Count -eq 1){ [Console]::WriteLine($matches[0].File + '|' + $reason); exit 0 } }; exit 1"`) do (
+    set "MATCH_FILE=%%I"
+    set "MATCH_REASON=%%J"
+)
+if not defined MATCH_FILE exit /b 1
+set "PATCHED_SHARED_ASSETS_PATH=%PATCHED_SHARED_ASSETS_DIR%\%MATCH_FILE%"
+if not exist "%PATCHED_SHARED_ASSETS_PATH%" exit /b 1
+set "PATCHED_SHARED_ASSETS_MATCH=%MATCH_REASON%"
+exit /b 0
 
 :browseForGameDir
 set "BROWSE_RESULT="
@@ -195,7 +255,7 @@ echo.
  echo %GAME_DIR%
  echo.
  echo Relaunching the installer as administrator...
- set "ELEVATE_SCRIPT=%~f0"
+ set "ELEVATE_SCRIPT=%SCRIPT_PATH%"
  set "ELEVATE_GAME_DIR=%GAME_DIR%"
  set "ELEVATE_RELEASE_ROOT=%RELEASE_ROOT%"
  powershell -NoProfile -ExecutionPolicy Bypass -Command "$scriptPath = $env:ELEVATE_SCRIPT; $releaseRoot = $env:ELEVATE_RELEASE_ROOT; $commandLine = 'call ' + [char]34 + $scriptPath + [char]34; Start-Process -FilePath $env:ComSpec -WorkingDirectory $releaseRoot -ArgumentList @('/k', $commandLine) -Verb RunAs"

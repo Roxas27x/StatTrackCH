@@ -1,12 +1,28 @@
 StatTrack - Changelog
 
+2026-04-27
+- Bumped the release to StatTrack v1.0.8.
+- Changed Song Speed to use 1% increments by default.
+- Added orange-fret Song Speed increment cycling: 1%, 5%, 10%, 50%, then back to 1%.
+- Expanded Song Speed bounds to 1% minimum and 10000% maximum.
+- Coalesced active-song export work before background writes so rapid main-thread update requests are batched instead of firing back-to-back.
+- Paced active-song file writes and export batches with short cooldowns to reduce bursty disk activity during gameplay.
+- Set overlay input checks to 0.05 seconds for more responsive editor and menu input.
+- Locked the global FCs Past export fallback to `FCs UP TO {{section}}: {{fcs_past}}`.
+- Added per-song-section FCs Past override lines that replace the locked fallback only for that section.
+- Kept sections without FCs Past overrides on the normal tracked-section export path so no extra redundant files are created.
+- Added the `{{section}}` token alongside `{{section_name}}` for section export templates.
+- Scrubbed stale global `section.fcs_past` overrides from the previous template attempt during template normalization.
+- Updated FCs Past export preview and worker template caching so section overrides are previewed and cached cleanly.
+
 2026-04-26
 - Bumped the release to StatTrack v1.0.7.
 - Reduced in-song tracking/export work so active settings drive what the main thread reads and writes.
 - Optimized NoteSplit and desktop overlay updates to skip unnecessary redraws and state writes during gameplay.
 - Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
 - Kept current-song section FC exports lightweight by exporting only checked sections.
-- Updated the installer to rename existing Assembly-CSharp.dll and sharedassets1.assets files, install bundled clean baselines, then apply StatTrack on top.
+- Updated the installer to back up existing Assembly-CSharp.dll and sharedassets1.assets files, restore local baselines on reinstall, then apply StatTrack on top.
+- Added local test support for Unity 2021.3.14f1 and 2021.3.45f2 sharedassets1.assets patch variants, selected by asset hash and UnityPlayer version.
 - Replaced the stock main-menu News feed with StatTrack update history entries that link to the matching GitHub releases.
 - Added a StatTrack Discord entry to the top of the main-menu News feed.
 - Added keyboard focus controls for the News feed: Tab toggles News focus, Right Arrow enters it, and Left Arrow exits it.

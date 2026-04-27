@@ -2,7 +2,7 @@
 
 StatTrack is a Clone Hero v1 mod for stream-friendly run tracking, NoteSplit splits, and opt-in OBS text exports.
 
-Current public release: **StatTrack v1.0.7**  
+Current public release: **StatTrack v1.0.8**
 Download: [GitHub Releases](https://github.com/Roxas27x/StatTrackCH/releases)
 
 ## What It Adds
@@ -14,24 +14,25 @@ Download: [GitHub Releases](https://github.com/Roxas27x/StatTrackCH/releases)
 - Export Templates for customizing the text written to OBS files.
 - Main-menu animated tint controls.
 - A StatTrack main-menu News feed with the Discord card and update-history links.
-- Clean-baseline installation so every user installs over the same clean `Assembly-CSharp.dll` and `sharedassets1.assets`.
+- Safer baseline installation that backs up local game files, restores local baselines on reinstall, and installs the animated-menu asset patch that matches the detected Clone Hero asset version.
 
-## v1.0.7 Focus
+## v1.0.8 Focus
 
-v1.0.7 is a smoothness and install-safety release. The tracker now tries to do as little as possible during songs unless a setting needs that work.
+v1.0.8 focuses on Song Speed control and steadier active-song export/write behavior while keeping the v1.0.7 smoothness and clean-install work intact.
 
-- Exact miss tracking is active only for exports or modes that need exact misses.
-- NoteSplit can update attempts and section misses without forcing OBS text writes.
-- Section FC exports only keep checked sections active and only write each checked section's `fcs_past.txt`.
-- Completed-run reflection stays near the end of a song instead of running constantly.
-- Desktop overlay state is written for NoteSplit only when NoteSplit is enabled.
-- The desktop overlay idles when NoteSplit is hidden.
-- Legacy desktop/stat widgets are intentionally disabled for this patch while the smoothness pass is locked in.
+- Song Speed defaults to 1% increments.
+- Pressing orange while focused on Song Speed cycles increments through 1%, 5%, 10%, and 50%.
+- Song Speed supports 1% minimum and 10000% maximum.
+- Active-song export requests are coalesced before the background worker writes files, reducing back-to-back write bursts from main-thread updates.
+- Active-song file writes and export batches are paced with short cooldowns for better gameplay stability.
+- Overlay input checks run every 0.05 seconds.
+- FCs Past exports use a locked global fallback line: `FCs UP TO {{section}}: {{fcs_past}}`.
+- Each song section can optionally save one FCs Past override line, and sections without overrides stay on the normal export path.
 
 ## Installation
 
 1. Close Clone Hero.
-2. Download the latest `StatTrack-v1.0.7.zip` from [Releases](https://github.com/Roxas27x/StatTrackCH/releases/latest).
+2. Download the latest `StatTrack-v1.0.8.zip` from [Releases](https://github.com/Roxas27x/StatTrackCH/releases/latest).
 3. Extract the zip somewhere convenient.
 4. Run `Install StatTrack.cmd`.
 5. Choose `Y` for the default `C:\Program Files\Clone Hero` install, or choose `N` to browse to a portable Clone Hero folder.
@@ -41,11 +42,12 @@ v1.0.7 is a smoothness and install-safety release. The tracker now tries to do a
 The installer checks that the selected folder contains a Clone Hero v1 install. It then:
 
 - Renames the existing `Clone Hero_Data\Managed\Assembly-CSharp.dll` instead of deleting it.
-- Renames the existing `Clone Hero_Data\sharedassets1.assets` instead of deleting it.
-- Installs bundled clean copies of both files.
+- Backs up the existing `Clone Hero_Data\sharedassets1.assets` instead of deleting it.
+- Restores those local baselines on reinstall so repeated installs do not stack patches.
 - Copies in `StatTrack.dll` and `StatTrackOverlay.exe`.
 - Patches the clean `Assembly-CSharp.dll` so StatTrack loads automatically.
-- Installs the StatTrack-patched `sharedassets1.assets` used by animated menu tint support.
+- Detects the local `sharedassets1.assets` hash, asset serialized version, and `UnityPlayer.dll` version.
+- Installs the StatTrack-patched `sharedassets1.assets` variant that matches the detected clean asset hash or Unity serialized version.
 
 Preferred backup names are:
 
@@ -155,7 +157,7 @@ Turning an export off also cleans up stale files for that export path.
 
 `NoteSplit Mode` opens a separate desktop window intended for OBS window capture. It shows section-by-section miss splits, section personal best miss counts, total attempts, current total misses, and previous section results.
 
-In v1.0.7 the NoteSplit window is lazy-created only when NoteSplit is enabled and visible. If NoteSplit is off, the desktop process should not launch just to idle.
+Since v1.0.7 the NoteSplit window is lazy-created only when NoteSplit is enabled and visible. If NoteSplit is off, the desktop process should not launch just to idle.
 
 Right-click the NoteSplit window for quick style options such as font selection and always-on-top behavior.
 
@@ -163,7 +165,7 @@ Right-click the NoteSplit window for quick style options such as font selection 
 
 When a song is loaded, the editor shows section checkboxes for the current song. Checked sections are the only sections included in active section export snapshots.
 
-For v1.0.7, checked sections export only:
+Checked sections export only:
 
 ```text
 fcs_past.txt
@@ -173,17 +175,17 @@ Older `name.txt`, `summary.txt`, `tracked.txt`, `start_time.txt`, `attempts.txt`
 
 ## Export Templates
 
-Open `EXPORT TEMPLATES` in the editor to customize FCs Past counters. this will be updated with the previous section files in a later update.
+Open `EXPORT TEMPLATES` in the editor to customize FCs Past counters. The global default is locked to `FCs UP TO {{section}}: {{fcs_past}}`, and each song section can optionally save one override line for its own `fcs_past.txt`.
 
 ## Main Menu Animated Tint
 
 The editor includes `Main Menu Animated Tint` controls for the main menu background, canvas, and wisp colors. These settings are visual only and are saved with the rest of the StatTrack config.
 
-Animated tint support uses the StatTrack-patched `sharedassets1.assets`, which is why the installer now starts from bundled clean assets before installing the patched version.
+Animated tint support uses the StatTrack-patched `sharedassets1.assets`. The installer chooses the patched asset variant for the detected clean asset hash or Unity serialized version. On unsupported baselines, it skips that shader asset patch so the game menu remains intact.
 
 ## Current Widget Status
 
-Older StatTrack builds experimented with pinned desktop stat widgets and section widgets. Those legacy widget surfaces are out of scope for v1.0.7 and are intentionally hard-disabled while the gameplay smoothness pass ships.
+Older StatTrack builds experimented with pinned desktop stat widgets and section widgets. Those legacy widget surfaces are still intentionally hard-disabled while the gameplay smoothness pass stays locked in.
 
 Use NoteSplit Mode for the supported desktop window, and use opt-in OBS text exports for stream layouts.
 
@@ -204,7 +206,9 @@ Assembly-CSharp.dll
 sharedassets1.assets
 ```
 
-The release build scripts package those clean files into `clean\`, generate the patched asset in `patched\`, and produce the release zip.
+Additional supported `sharedassets1.assets` baselines live in `asset-baselines\`.
+
+The release build scripts package clean asset variants into `clean\`, generate hash-named patched variants in `patched\`, write `patched\sharedassets1-manifest.txt`, and produce the release zip.
 
 Useful scripts:
 

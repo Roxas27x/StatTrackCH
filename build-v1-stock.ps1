@@ -16,6 +16,7 @@ $releaseDir = Join-Path $outDir "release"
 $workspaceRoot = Split-Path -Parent $root
 $cleanAssemblyPath = Join-Path $workspaceRoot "Assembly-CSharp.dll"
 $cleanAssetPath = Join-Path $workspaceRoot "sharedassets1.assets"
+$assetBaselineDir = Join-Path $root "asset-baselines"
 $shaderPatcherScript = Join-Path $root "tools\patch_animated_menu_shader.py"
 $cecilDll = Join-Path $root ".deps\cecil\Mono.Cecil.dll"
 $cecilRocksDll = Join-Path $root ".deps\cecil\Mono.Cecil.Rocks.dll"
@@ -47,6 +48,32 @@ function Resolve-GameDir {
     }
 
     throw "Unable to resolve a Clone Hero build directory. Set CLONE_HERO_BUILD_DIR or place a Clone Hero install at $(Join-Path (Split-Path $root -Parent) 'Clone Hero')."
+}
+
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+}
+
+function Get-UnitySerializedVersion {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $length = [Math]::Min([int]$stream.Length, 4096)
+        $buffer = New-Object byte[] $length
+        [void]$stream.Read($buffer, 0, $length)
+    } finally {
+        $stream.Dispose()
+    }
+
+    $text = [System.Text.Encoding]::ASCII.GetString($buffer)
+    if ($text -match "20\d{2}\.\d+\.\d+f\d+") {
+        return $Matches[0]
+    }
+
+    return "unknown"
 }
 
 $gameDir = Resolve-GameDir
@@ -140,13 +167,57 @@ $releaseCleanAssetPath = Join-Path $releaseCleanDir "sharedassets1.assets"
 $releasePatchedAssetPath = Join-Path $releasePatchedDir "sharedassets1.assets"
 Copy-Item -LiteralPath $cleanAssemblyPath -Destination $releaseCleanAssemblyPath -Force
 Copy-Item -LiteralPath $cleanAssetPath -Destination $releaseCleanAssetPath -Force
-Copy-Item -LiteralPath $cleanAssetPath -Destination $releasePatchedAssetPath -Force
-python $shaderPatcherScript $releasePatchedAssetPath $releaseCleanAssetPath
-if ($LASTEXITCODE -ne 0) { throw "Failed to build patched sharedassets1.assets." }
-$releasePatchedAssetBackupPath = "$releasePatchedAssetPath.animatedmenu-runtime-tint.bak"
-if (Test-Path $releasePatchedAssetBackupPath) {
-    Remove-Item -LiteralPath $releasePatchedAssetBackupPath -Force
+
+$sharedAssetBaselinePaths = @($cleanAssetPath)
+if (Test-Path $assetBaselineDir) {
+    $sharedAssetBaselinePaths += Get-ChildItem -LiteralPath $assetBaselineDir -Filter "sharedassets1-*.assets" -File | ForEach-Object { $_.FullName }
 }
+
+$seenSharedAssetHashes = @{}
+$manifestLines = @()
+$rootCleanAssetHash = Get-Sha256 -Path $cleanAssetPath
+
+foreach ($sharedAssetBaselinePath in $sharedAssetBaselinePaths) {
+    $baselineHash = Get-Sha256 -Path $sharedAssetBaselinePath
+    if ($seenSharedAssetHashes.ContainsKey($baselineHash)) {
+        continue
+    }
+
+    $seenSharedAssetHashes[$baselineHash] = $true
+    $baselineVersion = Get-UnitySerializedVersion -Path $sharedAssetBaselinePath
+    $variantFileName = "sharedassets1.$baselineHash.assets"
+    $releaseCleanVariantPath = Join-Path $releaseCleanDir $variantFileName
+    $releasePatchedVariantPath = Join-Path $releasePatchedDir $variantFileName
+
+    Copy-Item -LiteralPath $sharedAssetBaselinePath -Destination $releaseCleanVariantPath -Force
+    Copy-Item -LiteralPath $sharedAssetBaselinePath -Destination $releasePatchedVariantPath -Force
+    & python $shaderPatcherScript $releasePatchedVariantPath $releaseCleanVariantPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to build patched sharedassets1.assets variant for $baselineVersion ($baselineHash)."
+    }
+
+    $variantBackupPath = "$releasePatchedVariantPath.animatedmenu-runtime-tint.bak"
+    if (Test-Path $variantBackupPath) {
+        Remove-Item -LiteralPath $variantBackupPath -Force
+    }
+    $fixedBackupPath = Join-Path $releasePatchedDir "sharedassets1.assets.animatedmenu-runtime-tint.bak"
+    if (Test-Path $fixedBackupPath) {
+        Remove-Item -LiteralPath $fixedBackupPath -Force
+    }
+
+    $sourceName = Split-Path -Leaf $sharedAssetBaselinePath
+    $manifestLines += "$baselineHash|$baselineVersion|$variantFileName|$sourceName"
+    Write-Host "Built sharedassets1.assets patch variant for $baselineVersion ($baselineHash)"
+}
+
+$manifestPath = Join-Path $releasePatchedDir "sharedassets1-manifest.txt"
+Set-Content -LiteralPath $manifestPath -Value $manifestLines -Encoding ASCII
+
+$rootPatchedVariantPath = Join-Path $releasePatchedDir "sharedassets1.$rootCleanAssetHash.assets"
+if (-not (Test-Path $rootPatchedVariantPath)) {
+    throw "Missing patched sharedassets1.assets variant for bundled clean asset hash $rootCleanAssetHash."
+}
+Copy-Item -LiteralPath $rootPatchedVariantPath -Destination $releasePatchedAssetPath -Force
 
 Write-Host "Built stock helper at $stockDll"
 Write-Host "Built stock patcher at $patcherExe"

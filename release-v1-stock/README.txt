@@ -18,11 +18,13 @@ Recommended setup
 
 What the installer does
 - checks that the selected folder is a real Clone Hero v1 install
-- renames the existing "Clone Hero_Data\Managed\Assembly-CSharp.dll" and "Clone Hero_Data\sharedassets1.assets" instead of deleting them
-- installs bundled clean copies of both files so every install starts from the same baseline
+- backs up the existing "Clone Hero_Data\Managed\Assembly-CSharp.dll" and "Clone Hero_Data\sharedassets1.assets" instead of deleting them
+- restores those local baselines on reinstall so repeated installs do not stack patches
 - copies in the tracker files
 - patches Assembly-CSharp.dll so the mod loads automatically
-- installs the StatTrack-patched sharedassets1.assets for the animated menu support
+- detects your sharedassets1.assets hash, asset serialized version, and UnityPlayer version
+- installs the StatTrack-patched sharedassets1.assets variant that matches that clean asset hash or Unity serialized version
+- keeps your original sharedassets1.assets when no supported asset baseline matches, which avoids black menus and missing textures on other Clone Hero builds
 
 Overlay hotkeys
 - Home

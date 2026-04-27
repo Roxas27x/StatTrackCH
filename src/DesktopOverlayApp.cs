@@ -71,6 +71,7 @@ internal sealed class DesktopOverlayForm : Form
     private readonly string _statePath;
     private readonly string _configPath;
     private readonly string _stylePath;
+    private readonly string _noteSplitCommandsDir;
     private readonly string _logPath;
     private readonly System.Windows.Forms.Timer _timer;
     private DateTime _lastStateWriteUtc;
@@ -87,6 +88,7 @@ internal sealed class DesktopOverlayForm : Form
         _statePath = Path.Combine(dataDir, "state.json");
         _configPath = Path.Combine(dataDir, "config.json");
         _stylePath = Path.Combine(dataDir, "desktop-style.json");
+        _noteSplitCommandsDir = Path.Combine(dataDir, "notesplit-commands");
         _logPath = Path.Combine(dataDir, "desktop-overlay.log");
 
         AutoScaleMode = AutoScaleMode.None;
@@ -392,7 +394,14 @@ internal sealed class DesktopOverlayForm : Form
             return _noteSplitWindow;
         }
 
-        _noteSplitWindow = new NoteSplitWindowForm(CloneStyle(_style), SaveStyle, Log, SetNoteSplitDialogActive);
+        _noteSplitWindow = new NoteSplitWindowForm(
+            CloneStyle(_style),
+            SaveStyle,
+            Log,
+            SetNoteSplitDialogActive,
+            WriteNoteSplitSetSongAttemptsCommand,
+            WriteNoteSplitSetPersonalBestCommand,
+            WriteNoteSplitSetSongPersonalBestCommand);
         return _noteSplitWindow;
     }
 
@@ -421,6 +430,87 @@ internal sealed class DesktopOverlayForm : Form
         _style = CloneStyle(updatedStyle);
         _styleStatic = _style;
         WriteStyleFile();
+    }
+
+    private void WriteNoteSplitSetSongAttemptsCommand(OverlayTrackerState state, int attempts)
+    {
+        string songKey = state.Song?.SongKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(songKey))
+        {
+            return;
+        }
+
+        var command = new NoteSplitCommand
+        {
+            Command = NoteSplitCommand.SetSongAttempts,
+            SongKey = songKey,
+            Attempts = Math.Max(0, attempts)
+        };
+        WriteNoteSplitCommand(
+            command,
+            "NoteSplit set attempts requested | songKey=" + songKey + " | attempts=" + command.Attempts.ToString(CultureInfo.InvariantCulture),
+            "NoteSplit set attempts command failed");
+    }
+
+    private void WriteNoteSplitSetPersonalBestCommand(OverlayTrackerState state, OverlayNoteSplitSectionState section, int missCount)
+    {
+        string songKey = state.Song?.SongKey ?? string.Empty;
+        string sectionKey = section.Key ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(songKey) || string.IsNullOrWhiteSpace(sectionKey))
+        {
+            return;
+        }
+
+        var command = new NoteSplitCommand
+        {
+            Command = NoteSplitCommand.SetSectionPersonalBest,
+            SongKey = songKey,
+            SectionKey = sectionKey,
+            MissCount = Math.Max(0, missCount)
+        };
+        WriteNoteSplitCommand(
+            command,
+            "NoteSplit set section PB requested | songKey=" + songKey + " | section=" + sectionKey + " | misses=" + command.MissCount.ToString(CultureInfo.InvariantCulture),
+            "NoteSplit set section PB command failed");
+    }
+
+    private void WriteNoteSplitSetSongPersonalBestCommand(OverlayTrackerState state, int missCount, int overstrums)
+    {
+        string songKey = state.Song?.SongKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(songKey))
+        {
+            return;
+        }
+
+        var command = new NoteSplitCommand
+        {
+            Command = NoteSplitCommand.SetSongPersonalBest,
+            SongKey = songKey,
+            MissCount = Math.Max(0, missCount),
+            Overstrums = Math.Max(0, overstrums)
+        };
+        WriteNoteSplitCommand(
+            command,
+            "NoteSplit set song PB requested | songKey=" + songKey + " | misses=" + command.MissCount.ToString(CultureInfo.InvariantCulture) + " | overstrums=" + command.Overstrums.ToString(CultureInfo.InvariantCulture),
+            "NoteSplit set song PB command failed");
+    }
+
+    private void WriteNoteSplitCommand(NoteSplitCommand command, string successLog, string failureLog)
+    {
+        try
+        {
+            Directory.CreateDirectory(_noteSplitCommandsDir);
+            string fileName = "set-pb-" + DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N") + ".json";
+            string tempPath = Path.Combine(_noteSplitCommandsDir, fileName + ".tmp");
+            string finalPath = Path.Combine(_noteSplitCommandsDir, fileName);
+            File.WriteAllText(tempPath, Json.Serialize(command));
+            File.Move(tempPath, finalPath);
+            Log(successLog);
+        }
+        catch (Exception ex)
+        {
+            Log(failureLog + " | " + ex.Message);
+        }
     }
 
     private void WriteStyleFile()
@@ -549,11 +639,6 @@ internal sealed class DesktopOverlayForm : Form
             return "ingame_editor_visible";
         }
 
-        if (_state.IsPracticeMode)
-        {
-            return "practice_mode";
-        }
-
         if (_state.Song == null)
         {
             return "song_missing";
@@ -562,6 +647,11 @@ internal sealed class DesktopOverlayForm : Form
         if (IsNoteSplitWindowVisible(_state))
         {
             return "note_split_only";
+        }
+
+        if (_state.IsPracticeMode)
+        {
+            return "practice_mode";
         }
 
         return HasEnabledWidgets(ResolveSongConfig(_state)) ? "visible" : "no_overlay_content";
@@ -751,7 +841,6 @@ internal sealed class DesktopOverlayForm : Form
     private static bool IsNoteSplitWindowVisible(OverlayTrackerState state)
     {
         return state.IsInSong &&
-            !state.IsPracticeMode &&
             !state.OverlayEditorVisible &&
             state.Song != null &&
             state.NoteSplitModeEnabled;
@@ -965,6 +1054,28 @@ internal static class NoteSplitRenderer
         public List<OverlayNoteSplitSectionState> Rows { get; }
     }
 
+    public enum NoteSplitEditTarget
+    {
+        None,
+        SongAttempts,
+        SectionPersonalBest,
+        SongPersonalBest
+    }
+
+    public readonly struct NoteSplitEditHit
+    {
+        public NoteSplitEditHit(NoteSplitEditTarget target, OverlayNoteSplitSectionState? section = null, int? suggestedMissCount = null)
+        {
+            Target = target;
+            Section = section;
+            SuggestedMissCount = suggestedMissCount;
+        }
+
+        public NoteSplitEditTarget Target { get; }
+        public OverlayNoteSplitSectionState? Section { get; }
+        public int? SuggestedMissCount { get; }
+    }
+
     public static void DrawPanel(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style, float listScrollOffset = 0f, NoteSplitListLayout? cachedLayout = null)
     {
         const float padding = 10f;
@@ -978,7 +1089,7 @@ internal static class NoteSplitRenderer
         graphics.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width - 1f, rect.Height - 1f);
 
         string title = GetSongTitle(state);
-        string artist = state.Song?.Artist ?? string.Empty;
+        string subtitle = GetSongSubtitle(state);
         string attemptsText = state.Attempts.ToString(CultureInfo.InvariantCulture);
         string personalBestValue = FormatPersonalBestSummary(state.SongPersonalBestMissCount, state.SongPersonalBestOverstrums);
         string previousLabel = string.IsNullOrWhiteSpace(state.PreviousSection)
@@ -1013,7 +1124,7 @@ internal static class NoteSplitRenderer
             float subtitleHeight = Math.Max(1f, subtitleFont.GetHeight(graphics));
             float attemptsHeight = Math.Max(1f, attemptsFont.GetHeight(graphics));
             float attemptsLabelHeight = Math.Max(1f, smallLabelFont.GetHeight(graphics));
-            float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(artist) ? headerGap + subtitleHeight : 0f);
+            float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(subtitle) ? headerGap + subtitleHeight : 0f);
             float attemptsBlockHeight = attemptsHeight + headerGap + attemptsLabelHeight;
             float attemptsColumnWidth = Math.Max(
                 60f,
@@ -1045,9 +1156,9 @@ internal static class NoteSplitRenderer
             RectangleF previousRect = new RectangleF(rect.X + padding, personalBestRect.Bottom + footerGap, rect.Width - (padding * 2f), previousRectHeight);
 
             graphics.DrawString(title, titleFont, whiteBrush, titleRect, headerLeftFormat);
-            if (!string.IsNullOrWhiteSpace(artist))
+            if (!string.IsNullOrWhiteSpace(subtitle))
             {
-                graphics.DrawString(artist, subtitleFont, mutedBrush, artistRect, headerLeftFormat);
+                graphics.DrawString(subtitle, subtitleFont, mutedBrush, artistRect, headerLeftFormat);
             }
 
             graphics.DrawString(attemptsText, attemptsFont, whiteBrush, attemptsRect, headerRightFormat);
@@ -1208,6 +1319,123 @@ internal static class NoteSplitRenderer
         return Math.Max(24f, layout.RowHeight * 3f);
     }
 
+    public static bool TryHitTestEditTarget(
+        Graphics graphics,
+        RectangleF rect,
+        OverlayTrackerState state,
+        DesktopOverlayStyle style,
+        float listScrollOffset,
+        Point location,
+        out NoteSplitEditHit hit)
+    {
+        hit = default;
+        CalculateInteractiveRects(graphics, rect, state, style, out RectangleF attemptsEditRect, out RectangleF songPersonalBestRect);
+        if (attemptsEditRect.Contains(location.X, location.Y))
+        {
+            hit = new NoteSplitEditHit(NoteSplitEditTarget.SongAttempts);
+            return true;
+        }
+
+        if (songPersonalBestRect.Contains(location.X, location.Y))
+        {
+            hit = new NoteSplitEditHit(NoteSplitEditTarget.SongPersonalBest);
+            return true;
+        }
+
+        NoteSplitListLayout layout = BuildListLayout(graphics, rect, state, style);
+        if (layout.Rows.Count == 0 || layout.RowHeight <= 0.01f || !layout.ListRect.Contains(location.X, location.Y))
+        {
+            return false;
+        }
+
+        float clampedScrollOffset = Clamp(listScrollOffset, 0f, Math.Max(0f, (layout.RowHeight * layout.Rows.Count) - layout.ListRect.Height));
+        int rowIndex = (int)Math.Floor((location.Y - layout.ListRect.Y + clampedScrollOffset) / layout.RowHeight);
+        if (rowIndex < 0 || rowIndex >= layout.Rows.Count)
+        {
+            return false;
+        }
+
+        OverlayNoteSplitSectionState row = layout.Rows[rowIndex];
+        RectangleF rowRect = new RectangleF(layout.ListRect.X, layout.ListRect.Y + (layout.RowHeight * rowIndex) - clampedScrollOffset, layout.ListRect.Width, layout.RowHeight);
+        const float previousColumnWidth = 56f;
+        const float currentColumnWidth = 56f;
+        const float bestColumnWidth = 56f;
+        RectangleF bestRect = new RectangleF(rowRect.Right - bestColumnWidth - 8f, rowRect.Y + 1f, bestColumnWidth, rowRect.Height - 2f);
+        RectangleF currentRunRect = new RectangleF(bestRect.X - currentColumnWidth - 4f, rowRect.Y + 1f, currentColumnWidth, rowRect.Height - 2f);
+        RectangleF previousRunRect = new RectangleF(currentRunRect.X - previousColumnWidth - 4f, rowRect.Y + 1f, previousColumnWidth, rowRect.Height - 2f);
+
+        if (bestRect.Contains(location.X, location.Y))
+        {
+            hit = new NoteSplitEditHit(NoteSplitEditTarget.SectionPersonalBest, row, row.PersonalBestMissCount);
+            return true;
+        }
+
+        if (currentRunRect.Contains(location.X, location.Y) && row.CurrentRunMissCount.HasValue)
+        {
+            hit = new NoteSplitEditHit(NoteSplitEditTarget.SectionPersonalBest, row, row.CurrentRunMissCount.Value);
+            return true;
+        }
+
+        if (previousRunRect.Contains(location.X, location.Y) && row.PreviousValidRunMissCount.HasValue)
+        {
+            hit = new NoteSplitEditHit(NoteSplitEditTarget.SectionPersonalBest, row, row.PreviousValidRunMissCount.Value);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void CalculateInteractiveRects(
+        Graphics graphics,
+        RectangleF rect,
+        OverlayTrackerState state,
+        DesktopOverlayStyle style,
+        out RectangleF attemptsEditRect,
+        out RectangleF songPersonalBestRect)
+    {
+        const float padding = 10f;
+        const float headerGap = 4f;
+        const float footerGap = 4f;
+        const float minimumFooterHeight = 112f;
+
+        string attemptsText = state.Attempts.ToString(CultureInfo.InvariantCulture);
+        using var attemptsFont = CreateFont(style, 18f, FontStyle.Bold);
+        using var smallLabelFont = CreateFont(style, 10f, FontStyle.Regular);
+        using var totalFont = CreateFont(style, Clamp(rect.Width * 0.17f, 28f, 52f), FontStyle.Bold);
+        using var personalBestFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var personalBestValueFont = CreateFont(style, 12f, FontStyle.Bold);
+        using var previousFont = CreateFont(style, 11f, FontStyle.Regular);
+        using var previousValueFont = CreateFont(style, 12f, FontStyle.Bold);
+
+        float attemptsHeight = Math.Max(1f, attemptsFont.GetHeight(graphics));
+        float attemptsLabelHeight = Math.Max(1f, smallLabelFont.GetHeight(graphics));
+        float attemptsColumnWidth = Math.Max(
+            60f,
+            Math.Max(
+                graphics.MeasureString(attemptsText, attemptsFont).Width,
+                graphics.MeasureString("Attempts", smallLabelFont).Width) + 10f);
+        float totalHeight = Math.Max(1f, totalFont.GetHeight(graphics));
+        float personalBestHeight = Math.Max(personalBestFont.GetHeight(graphics), personalBestValueFont.GetHeight(graphics));
+        float previousHeight = Math.Max(previousFont.GetHeight(graphics), previousValueFont.GetHeight(graphics));
+        float totalRectHeight = totalHeight + 10f;
+        float personalBestRectHeight = personalBestHeight + 2f;
+        float previousRectHeight = previousHeight + 2f;
+        float footerHeight = Math.Max(
+            minimumFooterHeight,
+            padding + totalRectHeight + footerGap + personalBestRectHeight + footerGap + previousRectHeight + padding);
+
+        float headerTop = rect.Y + padding;
+        float attemptsX = rect.Right - padding - attemptsColumnWidth;
+        RectangleF attemptsRect = new RectangleF(attemptsX, headerTop, attemptsColumnWidth, attemptsHeight + 2f);
+        RectangleF attemptsLabelRect = new RectangleF(attemptsX, attemptsRect.Bottom + headerGap, attemptsColumnWidth, attemptsLabelHeight + 2f);
+        attemptsEditRect = RectangleF.Union(attemptsRect, attemptsLabelRect);
+        attemptsEditRect.Inflate(4f, 4f);
+
+        float footerTop = rect.Bottom - footerHeight + padding;
+        RectangleF totalRect = new RectangleF(rect.X + padding, footerTop, rect.Width - (padding * 2f), totalRectHeight);
+        songPersonalBestRect = new RectangleF(rect.X + padding, totalRect.Bottom + footerGap, rect.Width - (padding * 2f), personalBestRectHeight);
+    }
+
     public static NoteSplitListLayout BuildListLayout(Graphics graphics, RectangleF rect, OverlayTrackerState state, DesktopOverlayStyle style)
     {
         const float padding = 10f;
@@ -1217,7 +1445,7 @@ internal static class NoteSplitRenderer
         const float minimumFooterHeight = 112f;
 
         string title = GetSongTitle(state);
-        string artist = state.Song?.Artist ?? string.Empty;
+        string subtitle = GetSongSubtitle(state);
         string attemptsText = state.Attempts.ToString(CultureInfo.InvariantCulture);
         using var titleFont = CreateFont(style, Clamp(rect.Width * 0.065f, 12f, 20f), FontStyle.Bold);
         using var subtitleFont = CreateFont(style, 12f, FontStyle.Regular);
@@ -1233,7 +1461,7 @@ internal static class NoteSplitRenderer
         float subtitleHeight = Math.Max(1f, subtitleFont.GetHeight(graphics));
         float attemptsHeight = Math.Max(1f, attemptsFont.GetHeight(graphics));
         float attemptsLabelHeight = Math.Max(1f, smallLabelFont.GetHeight(graphics));
-        float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(artist) ? headerGap + subtitleHeight : 0f);
+        float headerTitleBlockHeight = titleHeight + (!string.IsNullOrWhiteSpace(subtitle) ? headerGap + subtitleHeight : 0f);
         float attemptsBlockHeight = attemptsHeight + headerGap + attemptsLabelHeight;
         float attemptsColumnWidth = Math.Max(
             60f,
@@ -1324,6 +1552,24 @@ internal static class NoteSplitRenderer
         return !string.IsNullOrWhiteSpace(songKey)
             ? songKey
             : "Unknown Song";
+    }
+
+    private static string GetSongSubtitle(OverlayTrackerState state)
+    {
+        OverlaySongDescriptor? song = state.Song;
+        string artist = song?.Artist ?? string.Empty;
+        string speedLabel = song?.SongSpeedLabel ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(speedLabel))
+        {
+            return artist;
+        }
+
+        if (string.IsNullOrWhiteSpace(artist))
+        {
+            return speedLabel;
+        }
+
+        return artist + " | " + speedLabel;
     }
 
     private static string FormatSectionValue(int missCount)
@@ -1419,6 +1665,9 @@ internal sealed class NoteSplitWindowForm : Form
     private readonly Action<DesktopOverlayStyle> _saveStyle;
     private readonly Action<string> _log;
     private readonly Action<bool> _setDialogActive;
+    private readonly Action<OverlayTrackerState, int> _setSongAttempts;
+    private readonly Action<OverlayTrackerState, OverlayNoteSplitSectionState, int> _setSectionPersonalBest;
+    private readonly Action<OverlayTrackerState, int, int> _setSongPersonalBest;
     private readonly ContextMenuStrip _contextMenu;
     private OverlayTrackerState _state = new();
     private DesktopOverlayStyle _style = new();
@@ -1436,12 +1685,22 @@ internal sealed class NoteSplitWindowForm : Form
     private string _lastSynchronizeSignature = string.Empty;
     private bool _listScrollManualOverride;
 
-    public NoteSplitWindowForm(DesktopOverlayStyle initialStyle, Action<DesktopOverlayStyle> saveStyle, Action<string> log, Action<bool> setDialogActive)
+    public NoteSplitWindowForm(
+        DesktopOverlayStyle initialStyle,
+        Action<DesktopOverlayStyle> saveStyle,
+        Action<string> log,
+        Action<bool> setDialogActive,
+        Action<OverlayTrackerState, int> setSongAttempts,
+        Action<OverlayTrackerState, OverlayNoteSplitSectionState, int> setSectionPersonalBest,
+        Action<OverlayTrackerState, int, int> setSongPersonalBest)
     {
         _style = CloneStyle(initialStyle);
         _saveStyle = saveStyle;
         _log = log;
         _setDialogActive = setDialogActive;
+        _setSongAttempts = setSongAttempts;
+        _setSectionPersonalBest = setSectionPersonalBest;
+        _setSongPersonalBest = setSongPersonalBest;
 
         AutoScaleMode = AutoScaleMode.None;
         BackColor = Color.FromArgb(8, 8, 8);
@@ -1466,6 +1725,7 @@ internal sealed class NoteSplitWindowForm : Form
         MouseMove += HandleMouseMove;
         MouseUp += HandleMouseUp;
         MouseWheel += HandleMouseWheel;
+        MouseDoubleClick += HandleMouseDoubleClick;
     }
 
     protected override bool ShowWithoutActivation => false;
@@ -1541,6 +1801,7 @@ internal sealed class NoteSplitWindowForm : Form
         var builder = new StringBuilder();
         builder.Append(visible ? '1' : '0');
         builder.Append('|').Append(state.IsInSong ? '1' : '0');
+        builder.Append('|').Append(state.IsPracticeMode ? '1' : '0');
         builder.Append('|').Append(state.OverlayEditorVisible ? '1' : '0');
         builder.Append('|').Append(state.Attempts.ToString(CultureInfo.InvariantCulture));
         builder.Append('|').Append(state.CurrentMissedNotes.ToString(CultureInfo.InvariantCulture));
@@ -1550,6 +1811,7 @@ internal sealed class NoteSplitWindowForm : Form
         builder.Append('|').Append(state.SongPersonalBestOverstrums?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
         builder.Append('|').Append(state.PreviousSectionResultKind ?? string.Empty);
         builder.Append('|').Append(state.Song?.SongKey ?? string.Empty);
+        builder.Append('|').Append(state.Song?.SongSpeedLabel ?? string.Empty);
         builder.Append('|').Append(style.NoteSplitX.ToString("0.###", CultureInfo.InvariantCulture));
         builder.Append('|').Append(style.NoteSplitY.ToString("0.###", CultureInfo.InvariantCulture));
         builder.Append('|').Append(style.NoteSplitWidth.ToString("0.###", CultureInfo.InvariantCulture));
@@ -1669,6 +1931,156 @@ internal sealed class NoteSplitWindowForm : Form
         Invalidate();
     }
 
+    private bool IsInteractiveEditLocation(Point location)
+    {
+        try
+        {
+            using Graphics graphics = CreateGraphics();
+            NoteSplitRenderer.NoteSplitListLayout layout = NoteSplitRenderer.BuildListLayout(graphics, ClientRectangle, _state, _style);
+            float baseOffset = _listScrollManualOverride
+                ? _listScrollOffset
+                : NoteSplitRenderer.CalculateAutoScrollOffset(layout, _listScrollOffset);
+            return NoteSplitRenderer.TryHitTestEditTarget(
+                graphics,
+                ClientRectangle,
+                _state,
+                _style,
+                baseOffset,
+                location,
+                out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private DialogResult ShowNoteSplitDialog(Form dialog)
+    {
+        ActivateForInteraction();
+        _settingsDialogOpen = true;
+        _setDialogActive(true);
+        TopMost = false;
+        try
+        {
+            return dialog.ShowDialog(this);
+        }
+        finally
+        {
+            _settingsDialogOpen = false;
+            TopMost = _style.NoteSplitTopMost;
+            _setDialogActive(false);
+        }
+    }
+
+    private bool TryPromptForNumber(string title, string label, int initialValue, out int value)
+    {
+        value = Math.Max(0, initialValue);
+        using var dialog = new NoteSplitNumberEditForm(title, label, value);
+        if (ShowNoteSplitDialog(dialog) != DialogResult.OK)
+        {
+            return false;
+        }
+
+        value = dialog.ResultValue;
+        return true;
+    }
+
+    private bool TryPromptForSongPersonalBest(out int missCount, out int overstrums)
+    {
+        missCount = Math.Max(0, _state.SongPersonalBestMissCount ?? _state.CurrentMissedNotes);
+        overstrums = Math.Max(0, _state.SongPersonalBestOverstrums ?? _state.CurrentOverstrums);
+        using var dialog = new NoteSplitSongPersonalBestEditForm(missCount, overstrums);
+        if (ShowNoteSplitDialog(dialog) != DialogResult.OK)
+        {
+            return false;
+        }
+
+        missCount = dialog.MissCount;
+        overstrums = dialog.Overstrums;
+        return true;
+    }
+
+    private void HandleMouseDoubleClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || _settingsDialogOpen || !Visible)
+        {
+            return;
+        }
+
+        if (GetResizeGripRectangle().Contains(e.Location))
+        {
+            return;
+        }
+
+        try
+        {
+            using Graphics graphics = CreateGraphics();
+            NoteSplitRenderer.NoteSplitListLayout layout = NoteSplitRenderer.BuildListLayout(graphics, ClientRectangle, _state, _style);
+            float baseOffset = _listScrollManualOverride
+                ? _listScrollOffset
+                : NoteSplitRenderer.CalculateAutoScrollOffset(layout, _listScrollOffset);
+            if (!NoteSplitRenderer.TryHitTestEditTarget(
+                    graphics,
+                    ClientRectangle,
+                    _state,
+                    _style,
+                    baseOffset,
+                    e.Location,
+                    out NoteSplitRenderer.NoteSplitEditHit hit))
+            {
+                return;
+            }
+
+            _dragging = false;
+            _resizing = false;
+            Cursor = Cursors.Default;
+            switch (hit.Target)
+            {
+                case NoteSplitRenderer.NoteSplitEditTarget.SongAttempts:
+                    if (TryPromptForNumber("Edit Attempts", "Attempts", _state.Attempts, out int attempts))
+                    {
+                        _setSongAttempts(_state, attempts);
+                    }
+                    break;
+
+                case NoteSplitRenderer.NoteSplitEditTarget.SongPersonalBest:
+                    if (TryPromptForSongPersonalBest(out int songMissCount, out int songOverstrums))
+                    {
+                        _setSongPersonalBest(_state, songMissCount, songOverstrums);
+                    }
+                    break;
+
+                case NoteSplitRenderer.NoteSplitEditTarget.SectionPersonalBest:
+                    OverlayNoteSplitSectionState? section = hit.Section;
+                    if (section == null)
+                    {
+                        return;
+                    }
+
+                    int initialMissCount = Math.Max(
+                        0,
+                        hit.SuggestedMissCount ??
+                        section.PersonalBestMissCount ??
+                        section.CurrentRunMissCount ??
+                        section.PreviousValidRunMissCount ??
+                        0);
+                    string sectionLabel = string.IsNullOrWhiteSpace(section.Name)
+                        ? "Section PB misses"
+                        : section.Name + " PB misses";
+                    if (TryPromptForNumber("Edit Section PB", sectionLabel, initialMissCount, out int sectionMissCount))
+                    {
+                        _setSectionPersonalBest(_state, section, sectionMissCount);
+                    }
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log("NoteSplit double-click PB failure | " + ex.Message);
+        }
+    }
+
     private void HandleMouseDown(object? sender, MouseEventArgs e)
     {
         ActivateForInteraction();
@@ -1683,6 +2095,11 @@ internal sealed class NoteSplitWindowForm : Form
             _resizeCursorOrigin = Cursor.Position;
             _resizeWindowOrigin = Size;
             Cursor = Cursors.SizeNWSE;
+            return;
+        }
+
+        if (IsInteractiveEditLocation(e.Location))
+        {
             return;
         }
 
@@ -1930,6 +2347,173 @@ internal sealed class NoteSplitWindowForm : Form
     }
 }
 
+internal sealed class NoteSplitNumberEditForm : Form
+{
+    private const decimal MaxMetricValue = 999999m;
+    private readonly NumericUpDown _valueInput;
+
+    public int ResultValue => (int)_valueInput.Value;
+
+    public NoteSplitNumberEditForm(string title, string label, int initialValue)
+    {
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        Text = title;
+        ClientSize = new Size(340, 122);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            Padding = new Padding(12)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+        var valueLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            Text = label,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        _valueInput = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 0m,
+            Maximum = MaxMetricValue,
+            Value = ClampMetric(initialValue)
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var saveButton = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
+        var cancelButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttonPanel.Controls.Add(saveButton);
+        buttonPanel.Controls.Add(cancelButton);
+
+        layout.Controls.Add(valueLabel, 0, 0);
+        layout.Controls.Add(_valueInput, 1, 0);
+        layout.Controls.Add(buttonPanel, 0, 1);
+        layout.SetColumnSpan(buttonPanel, 2);
+        Controls.Add(layout);
+        AcceptButton = saveButton;
+        CancelButton = cancelButton;
+        Shown += (_, _) =>
+        {
+            _valueInput.Focus();
+            _valueInput.Select(0, _valueInput.Text.Length);
+        };
+    }
+
+    private static decimal ClampMetric(int value)
+    {
+        if (value < 0)
+        {
+            return 0m;
+        }
+
+        return value > MaxMetricValue ? MaxMetricValue : value;
+    }
+}
+
+internal sealed class NoteSplitSongPersonalBestEditForm : Form
+{
+    private const decimal MaxMetricValue = 999999m;
+    private readonly NumericUpDown _missInput;
+    private readonly NumericUpDown _overstrumInput;
+
+    public int MissCount => (int)_missInput.Value;
+    public int Overstrums => (int)_overstrumInput.Value;
+
+    public NoteSplitSongPersonalBestEditForm(int initialMissCount, int initialOverstrums)
+    {
+        AutoScaleMode = AutoScaleMode.None;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        Text = "Edit Song PB";
+        ClientSize = new Size(360, 162);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 3,
+            Padding = new Padding(12)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+        _missInput = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 0m,
+            Maximum = MaxMetricValue,
+            Value = ClampMetric(initialMissCount)
+        };
+        _overstrumInput = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 0m,
+            Maximum = MaxMetricValue,
+            Value = ClampMetric(initialOverstrums)
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var saveButton = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
+        var cancelButton = new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttonPanel.Controls.Add(saveButton);
+        buttonPanel.Controls.Add(cancelButton);
+
+        layout.Controls.Add(new Label { Text = "PB Misses", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill }, 0, 0);
+        layout.Controls.Add(_missInput, 1, 0);
+        layout.Controls.Add(new Label { Text = "PB Overstrums", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill }, 0, 1);
+        layout.Controls.Add(_overstrumInput, 1, 1);
+        layout.Controls.Add(buttonPanel, 0, 2);
+        layout.SetColumnSpan(buttonPanel, 2);
+        Controls.Add(layout);
+        AcceptButton = saveButton;
+        CancelButton = cancelButton;
+        Shown += (_, _) =>
+        {
+            _missInput.Focus();
+            _missInput.Select(0, _missInput.Text.Length);
+        };
+    }
+
+    private static decimal ClampMetric(int value)
+    {
+        if (value < 0)
+        {
+            return 0m;
+        }
+
+        return value > MaxMetricValue ? MaxMetricValue : value;
+    }
+}
+
 internal sealed class NoteSplitSettingsForm : Form
 {
     private readonly CheckBox _topMostInput;
@@ -2133,6 +2717,7 @@ internal sealed class OverlaySongDescriptor
 {
     public string? SongKey { get; set; }
     public string? OverlayLayoutKey { get; set; }
+    public string? SongSpeedLabel { get; set; }
     public string? Title { get; set; }
     public string? Artist { get; set; }
 }
@@ -2155,6 +2740,20 @@ internal sealed class OverlayNoteSplitSectionState
     public int? PersonalBestMissCount { get; set; }
     public int? CurrentRunMissCount { get; set; }
     public string? ResultKind { get; set; }
+}
+
+internal sealed class NoteSplitCommand
+{
+    public const string SetSectionPersonalBest = "set_section_personal_best";
+    public const string SetSongAttempts = "set_song_attempts";
+    public const string SetSongPersonalBest = "set_song_personal_best";
+
+    public string Command { get; set; } = string.Empty;
+    public string SongKey { get; set; } = string.Empty;
+    public string SectionKey { get; set; } = string.Empty;
+    public int MissCount { get; set; }
+    public int Overstrums { get; set; }
+    public int Attempts { get; set; }
 }
 
 internal static class OverlayNoteSplitResultKind

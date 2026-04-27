@@ -1,24 +1,31 @@
-**StatTrack v1.0.7**
+**StatTrack v1.0.8**
 
-This release is a smoothness and install-safety pass for Clone Hero v1. The goal is simple: less work during gameplay, fewer unnecessary exports/redraws, and a repeatable clean install path for every user.
+This release focuses on two things: better Song Speed control and steadier background export/write behavior during gameplay.
 
 ## Highlights
-- Reduced in-song tracking work so StatTrack only reads stats required by active exports or NoteSplit.
-- Optimized NoteSplit and the desktop overlay to skip unnecessary redraws and state writes while a song is running.
-- Restored NoteSplit attempt updates without forcing unrelated OBS export writes.
-- Kept section FC exports lightweight: only checked current-song sections stay in the active export path.
-- Added clean-baseline installation. The installer renames the user's existing `Assembly-CSharp.dll` and `sharedassets1.assets`, installs bundled clean copies, then applies StatTrack on top.
-- Replaced the stock main-menu News feed with StatTrack update history entries that link to GitHub releases.
-- Added a StatTrack Discord card to the top of the News feed.
-- Added keyboard focus controls for the News feed: Tab toggles focus, Right Arrow enters, and Left Arrow exits.
-- Restored live animated main menu tint refreshes while browsing song select.
-- Removed stale Ctrl+O help text. Overlay hotkeys are now Home and F8.
+- Song Speed now defaults to 1% increments instead of Clone Hero's stock 5%.
+- Pressing orange while focused on Song Speed cycles increments through 1%, 5%, 10%, and 50%, then back to 1%.
+- Song Speed now supports 1% minimum and 10000% maximum.
+- Active-song export work is now coalesced before the background worker writes files, so rapid main-thread update requests are batched instead of firing back-to-back.
+- Active-song file writes are paced with a short cooldown between writes, which should reduce bursty disk activity and make gameplay more stable.
+- Overlay input checks now run every 0.05 seconds for responsive editor/menu input without returning to the old ultra-aggressive polling.
+- FCs Past exports now have a locked global fallback: `FCs UP TO {{section}}: {{fcs_past}}`.
+- Each song section can optionally save one FCs Past override line.
+- If a section has an override, that override replaces the locked fallback for that section only.
+- If a section has no override, it stays on the global export path and does not create an extra redundant file.
+- Old global `section.fcs_past` overrides from the previous attempt are ignored and scrubbed during template normalization.
+
+## Stability Notes
+- During songs, export work now waits briefly to collect any pending updates before writing.
+- The worker also pauses briefly after an active-song export batch.
+- Individual active-song text writes are spaced out instead of being allowed to hammer the filesystem in one tight burst.
 
 ## Install Notes
 - Close Clone Hero before installing.
 - The installer renames existing game files instead of deleting them.
-- The release zip now includes `clean\Assembly-CSharp.dll`, `clean\sharedassets1.assets`, and `patched\sharedassets1.assets` so every install starts from the same baseline.
+- The release zip includes clean and patched sharedassets variants for the supported Clone Hero v1 baselines.
 
 ## Verification
 - Build and runtime compatibility check passed locally.
-- Release package generated as `StatTrack-v1.0.7.zip`.
+- Local Fitz install passed before packaging.
+- Release package generated as `StatTrack-v1.0.8.zip`.
